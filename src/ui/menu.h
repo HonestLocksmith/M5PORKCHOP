@@ -11,6 +11,8 @@ struct MenuItem {
     uint8_t actionId;
 };
 
+using MenuCallback = std::function<void(uint8_t actionId)>;
+
 class Menu {
 public:
     static void init();
@@ -19,9 +21,12 @@ public:
     
     static void setItems(const std::vector<MenuItem>& items);
     static void setTitle(const String& title);
+    static void setCallback(MenuCallback cb);
     
     static int getSelectedId();
     static bool isActive() { return active; }
+    static bool wasSelected() { return selected; }
+    static void clearSelected() { selected = false; }
     static void show();
     static void hide();
     
@@ -31,8 +36,10 @@ private:
     static uint8_t selectedIndex;
     static uint8_t scrollOffset;
     static bool active;
+    static bool selected;
+    static MenuCallback callback;
     
-    static const uint8_t VISIBLE_ITEMS = 6;
+    static const uint8_t VISIBLE_ITEMS = 4;  // Fewer items for bigger font
     
     static void handleInput();
 };

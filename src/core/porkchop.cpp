@@ -34,7 +34,7 @@ void Porkchop::init() {
         deauthCount++;
     });
     
-    // Setup main menu
+    // Setup main menu with callback
     std::vector<MenuItem> mainMenuItems = {
         {"OINK Mode", 1},
         {"WARHOG Mode", 2},
@@ -43,6 +43,17 @@ void Porkchop::init() {
     };
     Menu::setItems(mainMenuItems);
     Menu::setTitle("PORKCHOP");
+    
+    // Menu selection handler
+    Menu::setCallback([this](uint8_t actionId) {
+        switch (actionId) {
+            case 1: setMode(PorkchopMode::OINK_MODE); break;
+            case 2: setMode(PorkchopMode::WARHOG_MODE); break;
+            case 3: setMode(PorkchopMode::SETTINGS); break;
+            case 4: break; // About - future
+        }
+        Menu::clearSelected();
+    });
     
     Avatar::setState(AvatarState::HAPPY);
     

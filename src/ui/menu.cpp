@@ -10,6 +10,12 @@ String Menu::menuTitle = "Menu";
 uint8_t Menu::selectedIndex = 0;
 uint8_t Menu::scrollOffset = 0;
 bool Menu::active = false;
+bool Menu::selected = false;
+MenuCallback Menu::callback = nullptr;
+
+void Menu::setCallback(MenuCallback cb) {
+    callback = cb;
+}
 
 void Menu::init() {
     menuItems.clear();
@@ -51,11 +57,12 @@ void Menu::update() {
 
 void Menu::handleInput() {
     if (!M5Cardputer.Keyboard.isChange()) return;
+    if (!M5Cardputer.Keyboard.isPressed()) return;
     
     auto keys = M5Cardputer.Keyboard.keysState();
     
-    // Navigation
-    if (M5Cardputer.Keyboard.isKeyPressed(';')) {  // Up
+    // Navigation with ; (up arrow) and . (down arrow)
+    if (M5Cardputer.Keyboard.isKeyPressed(';')) {
         if (selectedIndex > 0) {
             selectedIndex--;
             if (selectedIndex < scrollOffset) {
@@ -64,12 +71,20 @@ void Menu::handleInput() {
         }
     }
     
-    if (M5Cardputer.Keyboard.isKeyPressed('.')) {  // Down
+    if (M5Cardputer.Keyboard.isKeyPressed('.')) {
         if (selectedIndex < menuItems.size() - 1) {
             selectedIndex++;
             if (selectedIndex >= scrollOffset + VISIBLE_ITEMS) {
                 scrollOffset = selectedIndex - VISIBLE_ITEMS + 1;
             }
+        }
+    }
+    
+    // Select with Enter
+    if (keys.enter) {
+        selected = true;
+        if (callback && selectedIndex < menuItems.size()) {
+            callback(menuItems[selectedIndex].actionId);
         }
     }
 }
@@ -115,9 +130,9 @@ void Menu::draw(M5Canvas& canvas) {
         canvas.drawString("v", DISPLAY_W - 15, yOffset + (VISIBLE_ITEMS - 1) * lineHeight);
     }
     
-    // Instructions
+    // Instructions - ; and . are the arrow keys on M5Cardputer
     canvas.setTextSize(1);
     canvas.setTextColor(COLOR_ACCENT);
     canvas.setTextDatum(bottom_center);
-    canvas.drawString("[;/.]Nav [ENTER]Sel [`]Back", DISPLAY_W / 2, MAIN_H - 2);
+    canvas.drawString("[;=UP .=DN] [ENTER] [`=BACK]", DISPLAY_W / 2, MAIN_H - 2);
 }

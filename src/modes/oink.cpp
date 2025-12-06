@@ -2,6 +2,7 @@
 
 #include "oink.h"
 #include "../core/config.h"
+#include "../core/wsl_bypasser.h"
 #include "../ui/display.h"
 #include "../piglet/mood.h"
 #include "../ml/inference.h"
@@ -89,6 +90,9 @@ void OinkMode::start() {
     if (running) return;
     
     Serial.println("[OINK] Starting auto-attack mode (like M5Gotchi)...");
+    
+    // Initialize WSL bypasser for deauth frame injection
+    WSLBypasser::init();
     
     // Initialize WiFi in promiscuous mode
     WiFi.mode(WIFI_STA);

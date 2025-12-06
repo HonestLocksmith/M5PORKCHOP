@@ -259,7 +259,7 @@ void OinkMode::update() {
             // Timeout - move to next target
             if (now - attackStartTime > ATTACK_TIMEOUT) {
                 Serial.printf("[OINK] Timeout on %s, moving to next\n", 
-                    targetIndex >= 0 ? networks[targetIndex].ssid : "?");
+                    (targetIndex >= 0 && targetIndex < (int)networks.size()) ? networks[targetIndex].ssid : "?");
                 autoState = AutoState::WAITING;
                 stateStartTime = now;
                 deauthing = false;
@@ -447,7 +447,7 @@ void OinkMode::processBeacon(const uint8_t* payload, uint16_t len, int8_t rssi) 
     bool hasPMF = detectPMF(payload, len);
     
     // Capture beacon for target AP (needed for PCAP/hashcat)
-    if (targetIndex >= 0 && !beaconCaptured) {
+    if (targetIndex >= 0 && targetIndex < (int)networks.size() && !beaconCaptured) {
         DetectedNetwork* target = &networks[targetIndex];
         if (memcmp(bssid, target->bssid, 6) == 0) {
             // Allocate and copy beacon frame
@@ -707,7 +707,7 @@ void OinkMode::processEAPOL(const uint8_t* payload, uint16_t len,
     
     // M1 = AP initiating handshake = client reconnected after deauth!
     // If we're deauthing this target, our deauth worked!
-    if (messageNum == 1 && deauthing && targetIndex >= 0) {
+    if (messageNum == 1 && deauthing && targetIndex >= 0 && targetIndex < (int)networks.size()) {
         if (memcmp(bssid, networks[targetIndex].bssid, 6) == 0) {
             // Deauth success - client is reconnecting!
             Mood::onDeauthSuccess(station);

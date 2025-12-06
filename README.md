@@ -90,7 +90,19 @@
             - ML Training: 32-feature vectors for model training
 
 
-----[ 3.3 - Machine Learning
+----[ 3.3 - File Transfer Mode
+
+    Need to grab those juicy PCAPs off your piglet? WiFi file transfer:
+
+        * Creates WiFi AP with configurable SSID/password
+        * Black & white web interface at porkchop.local or 192.168.4.1
+        * Browse SD card directories (/handshakes, /wardriving, etc.)
+        * Download captured handshakes and wardriving data
+        * Upload files back to the piglet
+        * No cables, no fuss
+
+
+----[ 3.4 - Machine Learning
 
     PORKCHOP doesn't just capture - it thinks. The ML system extracts
     32 features from every beacon frame:
@@ -156,7 +168,12 @@
         | ;     | Navigate up / Decrease value     |
         | .     | Navigate down / Increase value   |
         | Enter | Select / Toggle / Confirm        |
+        | G0    | Return to IDLE from any mode     |
         +-------+----------------------------------+
+
+    G0 is the physical button on the top side of the M5Cardputer.
+    Press it anytime to bail out and return to IDLE. Useful when
+    your piglet is going ham on someone's network.
 
 
 --[ 7 - Configuration

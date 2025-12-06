@@ -30,7 +30,10 @@ M5Porkchop is a WiFi security research tool for the M5Cardputer (ESP32-S3 based)
 ### UI Layer
 - `src/ui/display.cpp/h` - Triple-buffered canvas system (topBar, mainCanvas, bottomBar), 240x135 display
 - `src/ui/menu.cpp/h` - Main menu with callback system
-- `src/ui/settings_menu.cpp/h` - Interactive settings with TOGGLE, VALUE, ACTION item types
+- `src/ui/settings_menu.cpp/h` - Interactive settings with TOGGLE, VALUE, ACTION, TEXT item types
+
+### Web Interface
+- `src/web/fileserver.cpp/h` - WiFi AP file server for SD card access, black/white web UI
 
 ### Piglet Personality
 - `src/piglet/avatar.cpp/h` - ASCII art pig face rendering with derpy style, direction flipping (L/R)
@@ -71,14 +74,16 @@ M5Porkchop is a WiFi security research tool for the M5Cardputer (ESP32-S3 based)
 - **Enter** - Select/Toggle/Confirm
 - **Backtick (`)** - Open menu / Exit to previous mode
 - **O/W/S** - Quick mode shortcuts from IDLE (Oink/Warhog/Settings)
+- **G0 button** - Physical button on top, returns to IDLE from any mode (uses GPIO0 direct read)
 
 ## Mode State Machine
 
 ```
 PorkchopMode:
-  IDLE -> OINK_MODE | WARHOG_MODE | MENU | SETTINGS | CAPTURES | ABOUT
+  IDLE -> OINK_MODE | WARHOG_MODE | MENU | SETTINGS | CAPTURES | ABOUT | FILE_TRANSFER
   MENU -> (any mode via menu selection)
-  SETTINGS/CAPTURES/ABOUT -> MENU (via Enter or backtick)
+  SETTINGS/CAPTURES/ABOUT/FILE_TRANSFER -> MENU (via Enter or backtick)
+  G0 button -> IDLE (from any mode)
 ```
 
 **Important**: `previousMode` only stores "real" modes (IDLE, OINK_MODE, WARHOG_MODE), never MENU/SETTINGS/ABOUT, to prevent navigation loops.
@@ -101,6 +106,9 @@ Settings use `SettingItem` struct with types:
 - `TOGGLE` - ON/OFF, Enter toggles, arrows navigate
 - `VALUE` - Numeric with min/max/step, arrows adjust directly
 - `ACTION` - Triggers function (e.g., Save & Exit)
+- `TEXT` - String input (Enter to edit, type characters, Enter to confirm, backtick to cancel)
+
+Text input handles Shift+key for uppercase and special characters via keyboard library.
 
 Settings persist to `/porkchop.conf` via ArduinoJson.
 

@@ -130,6 +130,63 @@ WiFiFeatures FeatureExtractor::extractFromScan(const wifi_ap_record_t* ap) {
     return f;
 }
 
+WiFiFeatures FeatureExtractor::extractBasic(int8_t rssi, uint8_t channel, wifi_auth_mode_t authmode) {
+    WiFiFeatures f = {0};
+    
+    // Signal characteristics
+    f.rssi = rssi;
+    f.noise = -95;  // Typical noise floor for ESP32
+    f.snr = (float)(f.rssi - f.noise);
+    
+    // Channel info
+    f.channel = channel;
+    f.secondaryChannel = 0;  // Unknown from basic scan
+    
+    // Parse authmode
+    switch (authmode) {
+        case WIFI_AUTH_OPEN:
+            f.hasWPA = false;
+            f.hasWPA2 = false;
+            f.hasWPA3 = false;
+            break;
+        case WIFI_AUTH_WEP:
+            f.hasWPA = false;
+            f.hasWPA2 = false;
+            f.hasWPA3 = false;
+            break;
+        case WIFI_AUTH_WPA_PSK:
+            f.hasWPA = true;
+            break;
+        case WIFI_AUTH_WPA2_PSK:
+            f.hasWPA2 = true;
+            break;
+        case WIFI_AUTH_WPA_WPA2_PSK:
+            f.hasWPA = true;
+            f.hasWPA2 = true;
+            break;
+        case WIFI_AUTH_WPA3_PSK:
+            f.hasWPA3 = true;
+            break;
+        case WIFI_AUTH_WPA2_WPA3_PSK:
+            f.hasWPA2 = true;
+            f.hasWPA3 = true;
+            break;
+        case WIFI_AUTH_WPA2_ENTERPRISE:
+            f.hasWPA2 = true;
+            break;
+        default:
+            break;
+    }
+    
+    // Basic anomaly score
+    f.anomalyScore = 0.0f;
+    if (f.rssi > -30) f.anomalyScore += 0.3f;
+    if (authmode == WIFI_AUTH_OPEN) f.anomalyScore += 0.2f;
+    if (authmode == WIFI_AUTH_WEP) f.anomalyScore += 0.2f;
+    
+    return f;
+}
+
 WiFiFeatures FeatureExtractor::extractFromBeacon(const uint8_t* frame, uint16_t len, int8_t rssi) {
     WiFiFeatures f = {0};
     

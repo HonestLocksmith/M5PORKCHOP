@@ -63,6 +63,9 @@ public:
     static WiFiFeatures extractFromScan(const wifi_ap_record_t* ap);
     static WiFiFeatures extractFromBeacon(const uint8_t* frame, uint16_t len, int8_t rssi);
     
+    // Extract basic features when only Arduino WiFi accessors are available
+    static WiFiFeatures extractBasic(int8_t rssi, uint8_t channel, wifi_auth_mode_t authmode);
+    
     // Extract probe request features
     static ProbeFeatures extractFromProbe(const uint8_t* frame, uint16_t len, int8_t rssi);
     

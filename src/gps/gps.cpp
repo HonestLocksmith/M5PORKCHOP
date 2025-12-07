@@ -92,7 +92,9 @@ void GPS::updateData() {
     // Fix status
     currentData.valid = gps.location.isValid();
     currentData.age = gps.location.age();
-    currentData.fix = currentData.valid && (currentData.age < 2000);
+    // Relaxed age check: 30 seconds for wardriving (GPS may not update every sentence)
+    // Also accept if we have valid coords even with stale age (indoor/tunnel resume)
+    currentData.fix = currentData.valid && (currentData.age < 30000);
     
     // Track fix changes
     if (currentData.fix && !hadFix) {

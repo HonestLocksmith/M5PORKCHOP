@@ -11,6 +11,8 @@
 #include <WiFi.h>
 #include <SPI.h>
 #include <SD.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 
 // Maximum entries to prevent memory exhaustion (~120 bytes each, 2000 = ~240KB)
 static const size_t MAX_ENTRIES = 2000;
@@ -36,9 +38,11 @@ uint32_t WarhogMode::scanStartTime = 0;
 bool WarhogMode::enhancedMode = false;
 std::map<uint64_t, WiFiFeatures> WarhogMode::beaconFeatures;
 uint32_t WarhogMode::beaconCount = 0;
+volatile bool WarhogMode::beaconMapBusy = false;
 
-// Simple flag to avoid concurrent access between promiscuous callback and main thread
-static volatile bool beaconMapBusy = false;
+// Background scan task statics
+TaskHandle_t WarhogMode::scanTaskHandle = NULL;
+volatile int WarhogMode::scanResult = -2;  // -2 = not started, -1 = running, >=0 = complete
 
 void WarhogMode::init() {
     entries.clear();
@@ -127,6 +131,17 @@ void WarhogMode::stop() {
     
     running = false;
     
+    // Auto-save data if we have entries
+    if (!entries.empty()) {
+        // Auto-export standard CSV
+        exportCSV("/warhog_session.csv");
+        
+        // Auto-export ML training data if Enhanced mode was used
+        if (Config::ml().collectionMode == MLCollectionMode::ENHANCED) {
+            exportMLTraining("/ml_training.csv");
+        }
+    }
+    
     // Put GPS to sleep if power management enabled
     if (Config::gps().powerSave) {
         GPS::sleep();
@@ -135,6 +150,48 @@ void WarhogMode::stop() {
     Display::setWiFiStatus(false);
     
     Serial.println("[WARHOG] Stopped");
+}
+
+// Background task for WiFi scanning - runs sync scan without blocking main loop
+void WarhogMode::scanTask(void* pvParameters) {
+    Serial.println("[WARHOG] Scan task starting sync scan...");
+    
+    // Do full WiFi reset for reliable scanning
+    WiFi.scanDelete();
+    WiFi.disconnect(true);
+    WiFi.mode(WIFI_OFF);
+    vTaskDelay(pdMS_TO_TICKS(100));
+    WiFi.mode(WIFI_STA);
+    vTaskDelay(pdMS_TO_TICKS(100));
+    
+    // Sync scan - this blocks until complete (which is fine in background task)
+    int result = WiFi.scanNetworks(false, true);  // sync, show hidden
+    
+    Serial.printf("[WARHOG] Scan task got %d networks\n", result);
+    
+    // Store result for main loop to pick up
+    scanResult = result;
+    
+    // Re-enable promiscuous mode for beacon capture if Enhanced mode
+    // Must re-register callback after WiFi reset - need delay for WiFi to be ready
+    if (enhancedMode) {
+        vTaskDelay(pdMS_TO_TICKS(50));  // Let WiFi stabilize
+        
+        wifi_promiscuous_filter_t filter = {
+            .filter_mask = WIFI_PROMIS_FILTER_MASK_MGMT
+        };
+        esp_err_t err1 = esp_wifi_set_promiscuous_filter(&filter);
+        esp_wifi_set_promiscuous_rx_cb(promiscuousCallback);
+        esp_err_t err2 = esp_wifi_set_promiscuous(true);
+        
+        if (err1 != ESP_OK || err2 != ESP_OK) {
+            Serial.printf("[WARHOG] Promisc re-enable failed: filter=%d, enable=%d\n", err1, err2);
+        }
+    }
+    
+    // Clean up task handle
+    scanTaskHandle = NULL;
+    vTaskDelete(NULL);  // Self-delete
 }
 
 void WarhogMode::update() {
@@ -149,7 +206,35 @@ void WarhogMode::update() {
         lastPhraseTime = now;
     }
     
-    // Start new scan if interval elapsed
+    // Check if background scan task is complete
+    if (scanInProgress) {
+        if (scanResult >= 0) {
+            // Scan done
+            Serial.printf("[WARHOG] Background scan complete: %d networks in %lu ms\n", 
+                         scanResult, millis() - scanStartTime);
+            scanInProgress = false;
+            processScanResults();
+            scanResult = -2;  // Reset for next scan
+        } else if (scanTaskHandle == NULL && scanResult == -2) {
+            // Task ended but no result - something went wrong
+            Serial.println("[WARHOG] Background scan task ended unexpectedly");
+            scanInProgress = false;
+        } else if (now - scanStartTime > 20000) {
+            // Timeout after 20 seconds
+            Serial.println("[WARHOG] Background scan timeout");
+            if (scanTaskHandle != NULL) {
+                vTaskDelete(scanTaskHandle);
+                scanTaskHandle = NULL;
+            }
+            scanInProgress = false;
+            scanResult = -2;
+            WiFi.scanDelete();
+        }
+        // Still running - just return (UI stays responsive)
+        return;
+    }
+    
+    // Start new scan if interval elapsed and not already scanning
     if (now - lastScanTime >= scanInterval) {
         performScan();
         lastScanTime = now;
@@ -157,58 +242,53 @@ void WarhogMode::update() {
 }
 
 void WarhogMode::triggerScan() {
-    performScan();
+    if (!scanInProgress) {
+        performScan();
+    }
 }
 
 bool WarhogMode::isScanComplete() {
-    return WiFi.scanComplete() >= 0;
+    return !scanInProgress && scanResult >= 0;
 }
 
 void WarhogMode::performScan() {
-    Serial.println("[WARHOG] Starting WiFi scan...");
+    if (scanInProgress) return;
+    if (scanTaskHandle != NULL) return;  // Previous task still running
+    
+    Serial.println("[WARHOG] Starting background WiFi scan...");
     
     // Temporarily disable promiscuous mode for scanning (conflicts with scan API)
-    bool wasEnhanced = enhancedMode;
-    if (wasEnhanced) {
+    if (enhancedMode) {
         esp_wifi_set_promiscuous(false);
     }
     
-    // Full WiFi reset before each scan - ESP32 scanning is unreliable otherwise
-    WiFi.scanDelete();
-    WiFi.disconnect(true);
-    WiFi.mode(WIFI_OFF);
-    delay(100);
-    WiFi.mode(WIFI_STA);
-    delay(100);
+    scanInProgress = true;
+    scanStartTime = millis();
+    scanResult = -1;  // Running
     
-    uint32_t scanStart = millis();
+    // Create background task for sync scan
+    xTaskCreatePinnedToCore(
+        scanTask,           // Function
+        "wifiScan",         // Name
+        4096,               // Stack size
+        NULL,               // Parameters
+        1,                  // Priority (low)
+        &scanTaskHandle,    // Task handle
+        0                   // Run on core 0 (WiFi core)
+    );
     
-    // Synchronous scan - blocking but reliable on ESP32
-    int result = WiFi.scanNetworks(false, true);  // async=false, hidden=true
-    
-    if (result >= 0) {
-        Serial.printf("[WARHOG] Scan completed in %lu ms with %d networks\n", 
-                     millis() - scanStart, result);
-        processScanResults();
-    } else {
-        Serial.printf("[WARHOG] Scan failed: %d\n", result);
-    }
-    
-    // Re-enable promiscuous mode for beacon capture if Enhanced mode
-    if (wasEnhanced) {
-        esp_wifi_set_promiscuous(true);
+    if (scanTaskHandle == NULL) {
+        Serial.println("[WARHOG] Failed to create scan task");
+        scanInProgress = false;
+        scanResult = -2;
     }
 }
-
 void WarhogMode::processScanResults() {
-    int n = WiFi.scanComplete();
+    // Results are already in WiFi library from sync scan
+    int n = scanResult;
     
-    if (n == WIFI_SCAN_RUNNING) {
-        return;  // Still scanning
-    }
-    
-    if (n == WIFI_SCAN_FAILED || n < 0) {
-        Serial.println("[WARHOG] Scan failed");
+    if (n < 0) {
+        Serial.println("[WARHOG] No valid scan results");
         WiFi.scanDelete();
         return;
     }
@@ -217,38 +297,26 @@ void WarhogMode::processScanResults() {
     newCount = 0;
     
     // Get current GPS data
-    GPSData gps = GPS::getData();
-    bool hasGPS = GPS::hasFix();
+    GPSData gpsData = GPS::getData();
+    // For wardriving, accept ANY non-zero coordinates (even cached from previous fix)
+    // The age check is too strict when GPS outputs valid coords but hasn't updated recently
+    bool hasGPS = (gpsData.latitude != 0.0 && gpsData.longitude != 0.0);
     
-    SDLOG("WARHOG", "Found %d networks (GPS: %s, lat=%.6f, lon=%.6f)", 
-          n, hasGPS ? "yes" : "no", gps.latitude, gps.longitude);
-    
-    // Get actual wifi_ap_record_t array from ESP-IDF for accurate features
-    uint16_t apCount = n;
-    wifi_ap_record_t* apRecords = new wifi_ap_record_t[apCount];
-    if (!apRecords) {
-        Serial.println("[WARHOG] Failed to allocate AP records");
-        WiFi.scanDelete();
-        return;
-    }
-    
-    esp_err_t err = esp_wifi_scan_get_ap_records(&apCount, apRecords);
-    if (err != ESP_OK) {
-        Serial.printf("[WARHOG] Failed to get AP records: %d\n", err);
-        delete[] apRecords;
-        WiFi.scanDelete();
-        return;
-    }
+    SDLOG("WARHOG", "Found %d networks (GPS: %s, lat=%.6f, lon=%.6f, age=%lu)", 
+          n, hasGPS ? "yes" : "no", gpsData.latitude, gpsData.longitude, gpsData.age);
     
     // Guard beacon map access from promiscuous callback
     beaconMapBusy = true;
     
     size_t previousCount = entries.size();
     
-    for (uint16_t i = 0; i < apCount; i++) {
-        wifi_ap_record_t& ap = apRecords[i];
+    // Use Arduino WiFi library accessors (ESP-IDF buffer is already consumed by WiFi.scanNetworks)
+    for (int i = 0; i < n; i++) {
+        // Get BSSID as uint8_t array
+        uint8_t* bssidPtr = WiFi.BSSID(i);
+        if (!bssidPtr) continue;
         
-        int idx = findEntry(ap.bssid);
+        int idx = findEntry(bssidPtr);
         
         if (idx < 0) {
             // Check memory limit before adding
@@ -265,41 +333,44 @@ void WarhogMode::processScanResults() {
                 savedCount = 0;
             }
             
-            // New network - use actual ESP-IDF data
+            // New network - use Arduino WiFi accessors
             WardrivingEntry entry = {0};
-            memcpy(entry.bssid, ap.bssid, 6);
-            strncpy(entry.ssid, (const char*)ap.ssid, 32);
+            memcpy(entry.bssid, bssidPtr, 6);
+            String ssid = WiFi.SSID(i);
+            strncpy(entry.ssid, ssid.c_str(), 32);
             entry.ssid[32] = '\0';
-            entry.rssi = ap.rssi;
-            entry.channel = ap.primary;
-            entry.authmode = ap.authmode;
+            entry.rssi = WiFi.RSSI(i);
+            entry.channel = WiFi.channel(i);
+            entry.authmode = WiFi.encryptionType(i);
             entry.timestamp = millis();
             entry.saved = false;
             entry.label = 0;  // Unknown - user can label later
             
             // Extract ML features - Enhanced mode uses beacon-captured features
             if (enhancedMode) {
-                uint64_t key = bssidToKey(ap.bssid);
+                uint64_t key = bssidToKey(bssidPtr);
                 auto it = beaconFeatures.find(key);
                 if (it != beaconFeatures.end()) {
                     // Use beacon-extracted features (full IE parsing, WPS, vendor IEs, etc.)
                     entry.features = it->second;
                     // Update RSSI from scan (may be fresher)
-                    entry.features.rssi = ap.rssi;
-                    entry.features.snr = (float)(ap.rssi - entry.features.noise);
+                    entry.features.rssi = entry.rssi;
+                    entry.features.snr = (float)(entry.rssi - entry.features.noise);
                 } else {
-                    // No beacon captured yet, fall back to scan API
-                    entry.features = FeatureExtractor::extractFromScan(&ap);
+                    // No beacon captured yet, use basic features
+                    entry.features = FeatureExtractor::extractBasic(
+                        entry.rssi, entry.channel, entry.authmode);
                 }
             } else {
-                // Basic mode: use scan API features only
-                entry.features = FeatureExtractor::extractFromScan(&ap);
+                // Basic mode: use basic features
+                entry.features = FeatureExtractor::extractBasic(
+                    entry.rssi, entry.channel, entry.authmode);
             }
             
             if (hasGPS) {
-                entry.latitude = gps.latitude;
-                entry.longitude = gps.longitude;
-                entry.altitude = gps.altitude;
+                entry.latitude = gpsData.latitude;
+                entry.longitude = gpsData.longitude;
+                entry.altitude = gpsData.altitude;
             }
             
             entries.push_back(entry);
@@ -323,27 +394,26 @@ void WarhogMode::processScanResults() {
                          authModeToString(entry.authmode).c_str());
         } else {
             // Update existing - maybe update GPS if we have better fix
+            int8_t currentRssi = WiFi.RSSI(i);
             if (hasGPS && (entries[idx].latitude == 0 || 
-                          ap.rssi > entries[idx].rssi)) {
+                          currentRssi > entries[idx].rssi)) {
                 // Track if this was missing coords (will need save)
                 bool wasMissingCoords = (entries[idx].latitude == 0);
                 
-                entries[idx].latitude = gps.latitude;
-                entries[idx].longitude = gps.longitude;
-                entries[idx].altitude = gps.altitude;
-                entries[idx].rssi = ap.rssi;
+                entries[idx].latitude = gpsData.latitude;
+                entries[idx].longitude = gpsData.longitude;
+                entries[idx].altitude = gpsData.altitude;
+                entries[idx].rssi = currentRssi;
                 
                 // Update features - Enhanced mode may have better data now
                 if (enhancedMode) {
-                    uint64_t key = bssidToKey(ap.bssid);
+                    uint64_t key = bssidToKey(bssidPtr);
                     auto it = beaconFeatures.find(key);
                     if (it != beaconFeatures.end()) {
                         entries[idx].features = it->second;
-                        entries[idx].features.rssi = ap.rssi;
-                        entries[idx].features.snr = (float)(ap.rssi - entries[idx].features.noise);
+                        entries[idx].features.rssi = currentRssi;
+                        entries[idx].features.snr = (float)(currentRssi - entries[idx].features.noise);
                     }
-                } else {
-                    entries[idx].features = FeatureExtractor::extractFromScan(&ap);
                 }
                 
                 // If entry now has coords but wasn't saved yet, count as needing save
@@ -356,8 +426,6 @@ void WarhogMode::processScanResults() {
     
     // Release beacon map guard
     beaconMapBusy = false;
-    
-    delete[] apRecords;
     
     // Add newly discovered networks to count (entries that got coords are already counted above)
     newCount += entries.size() - previousCount;

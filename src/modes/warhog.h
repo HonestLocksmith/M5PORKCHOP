@@ -5,6 +5,8 @@
 #include <vector>
 #include <map>
 #include <esp_wifi.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 #include "../gps/gps.h"
 #include "../ml/features.h"
 
@@ -86,8 +88,14 @@ private:
     static bool enhancedMode;
     static std::map<uint64_t, WiFiFeatures> beaconFeatures;  // BSSID -> features from beacons
     static uint32_t beaconCount;
+    static volatile bool beaconMapBusy;  // Guard for beacon map access
+    
+    // Background scan task
+    static TaskHandle_t scanTaskHandle;
+    static volatile int scanResult;
     
     static void performScan();
+    static void scanTask(void* pvParameters);
     static void processScanResults();
     static void saveNewEntries();  // Auto-save entries with GPS to CSV
     static int findEntry(const uint8_t* bssid);

@@ -158,6 +158,39 @@ WiFiFeatures FeatureExtractor::extractFromBeacon(const uint8_t* frame, uint16_t 
     // Extract channel from DS Parameter Set IE if available (done in parseIEs)
     // If not found, channel remains 0
     
+    // Calculate anomaly score based on available data (same as extractFromScan)
+    f.anomalyScore = 0.0f;
+    
+    // Very strong signal is suspicious (possible rogue AP nearby)
+    if (f.rssi > -30) {
+        f.anomalyScore += 0.3f;
+    }
+    
+    // Open network (no WPA/WPA2/WPA3)
+    if (!f.hasWPA && !f.hasWPA2 && !f.hasWPA3) {
+        f.anomalyScore += 0.2f;
+    }
+    
+    // Hidden SSID
+    if (f.isHidden) {
+        f.anomalyScore += 0.1f;
+    }
+    
+    // Non-standard beacon interval (normal is 100ms = 0x64)
+    if (f.beaconInterval != 0 && (f.beaconInterval < 50 || f.beaconInterval > 200)) {
+        f.anomalyScore += 0.15f;
+    }
+    
+    // No HT capabilities in 2024+ is unusual
+    if (!(f.htCapabilities & 0x04)) {
+        f.anomalyScore += 0.1f;
+    }
+    
+    // WPS enabled on open network is suspicious (honeypot pattern)
+    if (f.hasWPS && !f.hasWPA && !f.hasWPA2 && !f.hasWPA3) {
+        f.anomalyScore += 0.25f;
+    }
+    
     return f;
 }
 
@@ -309,6 +342,10 @@ void FeatureExtractor::parseIEs(const uint8_t* frame, uint16_t len, WiFiFeatures
                     // Parse AKM suite to detect SAE (WPA3)
                     // Simplified: just mark WPA2 for now
                 }
+                break;
+                
+            case 50:  // Extended Supported Rates
+                features.supportedRates += ieLen;  // Add to existing count
                 break;
                 
             case 191:  // VHT Capabilities (802.11ac)

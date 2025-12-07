@@ -552,6 +552,15 @@ void OinkMode::processBeacon(const uint8_t* payload, uint16_t len, int8_t rssi) 
                 if (ieLen > 0 && ieLen <= 32) {
                     memcpy(net.ssid, payload + offset + 2, ieLen);
                     net.ssid[ieLen] = 0;
+                    
+                    // Check for all-null SSID (also hidden)
+                    bool allNull = true;
+                    for (uint8_t i = 0; i < ieLen; i++) {
+                        if (net.ssid[i] != 0) { allNull = false; break; }
+                    }
+                    if (allNull) {
+                        net.isHidden = true;
+                    }
                 } else if (ieLen == 0) {
                     // Hidden network (zero-length SSID)
                     net.isHidden = true;

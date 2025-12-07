@@ -41,13 +41,13 @@ void Porkchop::init() {
     
     // Setup main menu with callback
     std::vector<MenuItem> mainMenuItems = {
-        {"OINK Mode", 1},
-        {"WARHOG Mode", 2},
-        {"File Transfer", 3},
-        {"Captures", 4},
-        {"Log Viewer", 7},
-        {"Settings", 5},
-        {"About", 6}
+        {"OINK Mode", 1, "Hunt for handshakes"},
+        {"WARHOG Mode", 2, "Wardrive with GPS"},
+        {"File Transfer", 3, "WiFi file server"},
+        {"Captures", 4, "View saved loot"},
+        {"Log Viewer", 7, "Debug log tail"},
+        {"Settings", 5, "Tweak the pig"},
+        {"About", 6, "Credits and info"}
     };
     Menu::setItems(mainMenuItems);
     Menu::setTitle("PORKCHOP");

@@ -30,7 +30,8 @@ void SettingsMenu::loadFromConfig() {
         "WiFi SSID",
         SettingType::TEXT,
         0, 0, 0, 0, "",
-        Config::wifi().otaSSID
+        Config::wifi().otaSSID,
+        "Network for file xfer"
     });
     
     // WiFi Password
@@ -38,7 +39,8 @@ void SettingsMenu::loadFromConfig() {
         "WiFi Pass",
         SettingType::TEXT,
         0, 0, 0, 0, "",
-        Config::wifi().otaPassword
+        Config::wifi().otaPassword,
+        "Secret sauce goes here"
     });
     
     // Sound toggle
@@ -46,7 +48,8 @@ void SettingsMenu::loadFromConfig() {
         "Sound",
         SettingType::TOGGLE,
         Config::personality().soundEnabled ? 1 : 0,
-        0, 1, 1, "", ""
+        0, 1, 1, "", "",
+        "Beeps and boops"
     });
     
     // Brightness (0-100%)
@@ -54,7 +57,8 @@ void SettingsMenu::loadFromConfig() {
         "Brightness",
         SettingType::VALUE,
         (int)Config::personality().brightness,
-        10, 100, 10, "%", ""
+        10, 100, 10, "%", "",
+        "Screen glow level"
     });
     
     // Channel hop interval
@@ -62,7 +66,8 @@ void SettingsMenu::loadFromConfig() {
         "CH Hop",
         SettingType::VALUE,
         (int)Config::wifi().channelHopInterval,
-        100, 2000, 100, "ms", ""
+        100, 2000, 100, "ms", "",
+        "Faster = more coverage"
     });
     
     // Scan duration
@@ -70,7 +75,8 @@ void SettingsMenu::loadFromConfig() {
         "Scan Time",
         SettingType::VALUE,
         (int)Config::wifi().scanDuration,
-        500, 5000, 500, "ms", ""
+        500, 5000, 500, "ms", "",
+        "Dwell time per channel"
     });
     
     // Enable deauth
@@ -78,7 +84,8 @@ void SettingsMenu::loadFromConfig() {
         "Deauth",
         SettingType::TOGGLE,
         Config::wifi().enableDeauth ? 1 : 0,
-        0, 1, 1, "", ""
+        0, 1, 1, "", "",
+        "Kick clients off APs"
     });
     
     // GPS enabled
@@ -86,7 +93,8 @@ void SettingsMenu::loadFromConfig() {
         "GPS",
         SettingType::TOGGLE,
         Config::gps().enabled ? 1 : 0,
-        0, 1, 1, "", ""
+        0, 1, 1, "", "",
+        "Position tracking"
     });
     
     // GPS power save
@@ -94,7 +102,8 @@ void SettingsMenu::loadFromConfig() {
         "GPS PwrSave",
         SettingType::TOGGLE,
         Config::gps().powerSave ? 1 : 0,
-        0, 1, 1, "", ""
+        0, 1, 1, "", "",
+        "Sleep when not hunting"
     });
     
     // GPS Scan Interval (seconds between scans in WARHOG mode)
@@ -102,7 +111,8 @@ void SettingsMenu::loadFromConfig() {
         "Scan Intv",
         SettingType::VALUE,
         (int)Config::gps().updateInterval,
-        1, 30, 1, "s", ""
+        1, 30, 1, "s", "",
+        "WARHOG scan frequency"
     });
     
     // GPS Baud Rate (common values: 9600, 38400, 57600, 115200)
@@ -118,7 +128,8 @@ void SettingsMenu::loadFromConfig() {
         "GPS Baud",
         SettingType::VALUE,
         baudIndex,
-        0, 3, 1, "", ""  // Will display as baud rate in render
+        0, 3, 1, "", "",
+        "Match your GPS module"
     });
     
     // Timezone offset (UTC-12 to UTC+14)
@@ -126,7 +137,8 @@ void SettingsMenu::loadFromConfig() {
         "Timezone",
         SettingType::VALUE,
         (int)Config::gps().timezoneOffset,
-        -12, 14, 1, "h", ""
+        -12, 14, 1, "h", "",
+        "UTC offset for logs"
     });
     
     // ML Collection Mode (0=Basic, 1=Enhanced)
@@ -134,7 +146,8 @@ void SettingsMenu::loadFromConfig() {
         "ML Mode",
         SettingType::VALUE,
         static_cast<int>(Config::ml().collectionMode),
-        0, 1, 1, "", ""  // Will display as Basic/Enhanced in render
+        0, 1, 1, "", "",
+        "Enhanced = beacon sniff"
     });
     
     // SD Card Logging
@@ -142,15 +155,24 @@ void SettingsMenu::loadFromConfig() {
         "SD Log",
         SettingType::TOGGLE,
         SDLog::isEnabled() ? 1 : 0,
-        0, 1, 1, "", ""
+        0, 1, 1, "", "",
+        "Debug spam to SD"
     });
     
     // Save & Exit action
     items.push_back({
         "< Save & Exit >",
         SettingType::ACTION,
-        0, 0, 0, 0, "", ""
+        0, 0, 0, 0, "", "",
+        "Write config, bail out"
     });
+}
+
+String SettingsMenu::getSelectedDescription() {
+    if (selectedIndex < items.size()) {
+        return items[selectedIndex].description;
+    }
+    return "";
 }
 
 void SettingsMenu::saveToConfig() {

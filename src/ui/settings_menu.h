@@ -21,6 +21,7 @@ struct SettingItem {
     int step;
     String suffix;  // %, ms, etc.
     String textValue;  // For TEXT type
+    String description;  // Short help text for bottom bar
 };
 
 class SettingsMenu {
@@ -34,6 +35,7 @@ public:
     static bool isActive() { return active; }
     static bool shouldExit() { return exitRequested; }
     static void clearExit() { exitRequested = false; }
+    static String getSelectedDescription();
     
 private:
     static std::vector<SettingItem> items;

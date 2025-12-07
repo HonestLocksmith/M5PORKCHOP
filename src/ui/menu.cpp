@@ -51,6 +51,13 @@ int Menu::getSelectedId() {
     return -1;
 }
 
+String Menu::getSelectedDescription() {
+    if (selectedIndex < menuItems.size()) {
+        return menuItems[selectedIndex].description;
+    }
+    return "";
+}
+
 void Menu::update() {
     if (!active) return;
     handleInput();

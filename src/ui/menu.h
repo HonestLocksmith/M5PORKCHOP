@@ -9,6 +9,7 @@
 struct MenuItem {
     String label;
     uint8_t actionId;
+    String description;  // Short help text for bottom bar
 };
 
 using MenuCallback = std::function<void(uint8_t actionId)>;
@@ -24,6 +25,7 @@ public:
     static void setCallback(MenuCallback cb);
     
     static int getSelectedId();
+    static String getSelectedDescription();
     static bool isActive() { return active; }
     static bool wasSelected() { return selected; }
     static void clearSelected() { selected = false; }

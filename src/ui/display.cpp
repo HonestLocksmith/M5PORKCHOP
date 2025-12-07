@@ -209,6 +209,12 @@ void Display::drawBottomBar() {
     } else if (mode == PorkchopMode::CAPTURES) {
         // CAPTURES: show selected capture's BSSID
         stats = CapturesMenu::getSelectedBSSID();
+    } else if (mode == PorkchopMode::SETTINGS) {
+        // SETTINGS: show description of selected item
+        stats = SettingsMenu::getSelectedDescription();
+    } else if (mode == PorkchopMode::MENU) {
+        // MENU: show description of selected item
+        stats = Menu::getSelectedDescription();
     } else {
         // Default: Networks, Handshakes, Deauths
         uint16_t netCount = porkchop.getNetworkCount();

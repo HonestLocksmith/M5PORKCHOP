@@ -39,6 +39,7 @@ public:
                            const String& line2 = "", bool blocking = true);
     static bool showConfirmBox(const String& title, const String& message);
     static void showProgress(const String& title, uint8_t percent);
+    static void showToast(const String& message);  // Quick non-blocking message
     
     // Status indicators
     static void setGPSStatus(bool hasFix);

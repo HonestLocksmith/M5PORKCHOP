@@ -6,6 +6,7 @@
 #include "../ui/menu.h"
 #include "../ui/settings_menu.h"
 #include "../ui/captures_menu.h"
+#include "../ui/log_viewer.h"
 #include "../piglet/mood.h"
 #include "../piglet/avatar.h"
 #include "../modes/oink.h"
@@ -44,6 +45,7 @@ void Porkchop::init() {
         {"WARHOG Mode", 2},
         {"File Transfer", 3},
         {"Captures", 4},
+        {"Log Viewer", 7},
         {"Settings", 5},
         {"About", 6}
     };
@@ -59,6 +61,7 @@ void Porkchop::init() {
             case 4: setMode(PorkchopMode::CAPTURES); break;
             case 5: setMode(PorkchopMode::SETTINGS); break;
             case 6: setMode(PorkchopMode::ABOUT); break;
+            case 7: setMode(PorkchopMode::LOG_VIEWER); break;
         }
         Menu::clearSelected();
     });
@@ -77,12 +80,13 @@ void Porkchop::update() {
 void Porkchop::setMode(PorkchopMode mode) {
     if (mode == currentMode) return;
     
-    // Only save "real" modes as previous (not SETTINGS/ABOUT/MENU/CAPTURES/FILE_TRANSFER)
+    // Only save "real" modes as previous (not SETTINGS/ABOUT/MENU/CAPTURES/FILE_TRANSFER/LOG_VIEWER)
     if (currentMode != PorkchopMode::SETTINGS && 
         currentMode != PorkchopMode::ABOUT && 
         currentMode != PorkchopMode::CAPTURES &&
         currentMode != PorkchopMode::MENU &&
-        currentMode != PorkchopMode::FILE_TRANSFER) {
+        currentMode != PorkchopMode::FILE_TRANSFER &&
+        currentMode != PorkchopMode::LOG_VIEWER) {
         previousMode = currentMode;
     }
     currentMode = mode;
@@ -117,6 +121,7 @@ void Porkchop::setMode(PorkchopMode mode) {
             break;
         case PorkchopMode::WARHOG_MODE:
             Avatar::setState(AvatarState::EXCITED);
+            Display::showToast("Sniffing the air...");
             WarhogMode::start();
             break;
         case PorkchopMode::MENU:
@@ -131,6 +136,9 @@ void Porkchop::setMode(PorkchopMode mode) {
         case PorkchopMode::FILE_TRANSFER:
             Avatar::setState(AvatarState::HAPPY);
             FileServer::start(Config::wifi().otaSSID.c_str(), Config::wifi().otaPassword.c_str());
+            break;
+        case PorkchopMode::LOG_VIEWER:
+            LogViewer::show();
             break;
         default:
             break;
@@ -277,6 +285,12 @@ void Porkchop::updateMode() {
             break;
         case PorkchopMode::FILE_TRANSFER:
             FileServer::update();
+            break;
+        case PorkchopMode::LOG_VIEWER:
+            LogViewer::update();
+            if (!LogViewer::isActive()) {
+                setMode(PorkchopMode::MENU);
+            }
             break;
         default:
             break;

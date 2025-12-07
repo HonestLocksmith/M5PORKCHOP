@@ -2,10 +2,12 @@
 
 #include "warhog.h"
 #include "../core/config.h"
+#include "../core/sdlog.h"
 #include "../ui/display.h"
 #include "../piglet/mood.h"
 #include "../ml/features.h"
 #include "../ml/inference.h"
+#include <M5Cardputer.h>
 #include <WiFi.h>
 #include <SPI.h>
 #include <SD.h>
@@ -25,6 +27,10 @@ uint32_t WarhogMode::wepNetworks = 0;
 uint32_t WarhogMode::wpaNetworks = 0;
 uint32_t WarhogMode::savedCount = 0;
 String WarhogMode::currentFilename = "";
+
+// Scan state (moved from local static to class static for proper reset)
+bool WarhogMode::scanInProgress = false;
+uint32_t WarhogMode::scanStartTime = 0;
 
 // Enhanced mode statics
 bool WarhogMode::enhancedMode = false;
@@ -81,9 +87,13 @@ void WarhogMode::start() {
     // Full WiFi reinitialization for clean slate
     WiFi.disconnect(true);  // Disconnect and clear settings
     WiFi.mode(WIFI_OFF);    // Turn off WiFi completely
-    delay(100);             // Let it settle
+    delay(200);             // Let it settle
     WiFi.mode(WIFI_STA);    // Station mode for scanning
-    delay(100);             // Let it initialize
+    delay(200);             // Let it initialize
+    
+    // Reset scan state (critical for proper operation after restart)
+    scanInProgress = false;
+    scanStartTime = 0;
     
     Serial.println("[WARHOG] WiFi initialized in STA mode");
     
@@ -139,19 +149,9 @@ void WarhogMode::update() {
         lastPhraseTime = now;
     }
     
-    // Periodic scanning with synchronous scan
+    // Start new scan if interval elapsed
     if (now - lastScanTime >= scanInterval) {
         performScan();
-        
-        // Process results immediately (synchronous scan)
-        int n = WiFi.scanComplete();
-        if (n >= 0) {
-            processScanResults();
-        }
-        
-        // Clean up
-        WiFi.scanDelete();
-        
         lastScanTime = now;
     }
 }
@@ -173,21 +173,28 @@ void WarhogMode::performScan() {
         esp_wifi_set_promiscuous(false);
     }
     
-    // Use SYNCHRONOUS scan for reliability - async has issues on ESP32
-    // This blocks but is more reliable for wardriving
-    int result = WiFi.scanNetworks(false, true);  // async=false (blocking), hidden=true
+    // Full WiFi reset before each scan - ESP32 scanning is unreliable otherwise
+    WiFi.scanDelete();
+    WiFi.disconnect(true);
+    WiFi.mode(WIFI_OFF);
+    delay(100);
+    WiFi.mode(WIFI_STA);
+    delay(100);
     
-    Serial.printf("[WARHOG] scanNetworks returned: %d\n", result);
+    uint32_t scanStart = millis();
+    
+    // Synchronous scan - blocking but reliable on ESP32
+    int result = WiFi.scanNetworks(false, true);  // async=false, hidden=true
     
     if (result >= 0) {
-        Serial.printf("[WARHOG] Scan complete, found %d networks\n", result);
-    } else if (result == WIFI_SCAN_FAILED) {
-        Serial.println("[WARHOG] Scan failed");
+        Serial.printf("[WARHOG] Scan completed in %lu ms with %d networks\n", 
+                     millis() - scanStart, result);
+        processScanResults();
     } else {
-        Serial.printf("[WARHOG] Unexpected scan result: %d\n", result);
+        Serial.printf("[WARHOG] Scan failed: %d\n", result);
     }
     
-    // Re-enable promiscuous if it was on
+    // Re-enable promiscuous mode for beacon capture if Enhanced mode
     if (wasEnhanced) {
         esp_wifi_set_promiscuous(true);
     }
@@ -213,8 +220,8 @@ void WarhogMode::processScanResults() {
     GPSData gps = GPS::getData();
     bool hasGPS = GPS::hasFix();
     
-    Serial.printf("[WARHOG] Found %d networks (GPS: %s)\n", 
-                 n, hasGPS ? "yes" : "no");
+    SDLOG("WARHOG", "Found %d networks (GPS: %s, lat=%.6f, lon=%.6f)", 
+          n, hasGPS ? "yes" : "no", gps.latitude, gps.longitude);
     
     // Get actual wifi_ap_record_t array from ESP-IDF for accurate features
     uint16_t apCount = n;
@@ -356,11 +363,26 @@ void WarhogMode::processScanResults() {
     newCount += entries.size() - previousCount;
     
     if (newCount > 0) {
+        SDLOG("WARHOG", "newCount=%lu, calling save (hasGPS=%d, SD=%d)", 
+              newCount, hasGPS ? 1 : 0, Config::isSDAvailable() ? 1 : 0);
+        
         // Use WARHOG-specific phrases for found networks
         Mood::onWarhogFound(nullptr, 0);
         
         // Auto-save new entries with GPS fix to CSV
         if (hasGPS && Config::isSDAvailable()) {
+            saveNewEntries();
+        }
+    } else {
+        // Check if there are unsaved entries with coords that should be saved
+        uint32_t unsavedWithCoords = 0;
+        for (const auto& e : entries) {
+            if (!e.saved && e.latitude != 0 && e.longitude != 0) {
+                unsavedWithCoords++;
+            }
+        }
+        if (unsavedWithCoords > 0 && hasGPS && Config::isSDAvailable()) {
+            SDLOG("WARHOG", "Found %lu unsaved entries with coords, saving", unsavedWithCoords);
             saveNewEntries();
         }
     }
@@ -403,18 +425,32 @@ static void writeCSVField(File& f, const char* ssid) {
 }
 
 void WarhogMode::saveNewEntries() {
+    SDLOG("WARHOG", "saveNewEntries called, currentFilename='%s'", currentFilename.c_str());
+    
+    // Ensure wardriving directory exists
+    if (!SD.exists("/wardriving")) {
+        if (SD.mkdir("/wardriving")) {
+            SDLOG("WARHOG", "Created /wardriving directory");
+        } else {
+            SDLOG("WARHOG", "Failed to create /wardriving directory");
+            Serial.println("[WARHOG] Failed to create /wardriving directory");
+            return;
+        }
+    }
+    
     // Create file with unique name on first save
     if (currentFilename.length() == 0) {
         currentFilename = generateFilename("csv");
+        SDLOG("WARHOG", "Generated filename: %s", currentFilename.c_str());
         
         // Write CSV header
         File f = SD.open(currentFilename.c_str(), FILE_WRITE);
         if (f) {
             f.println("BSSID,SSID,RSSI,Channel,AuthMode,Latitude,Longitude,Altitude,Timestamp");
             f.close();
-            Serial.printf("[WARHOG] Created file: %s\n", currentFilename.c_str());
+            SDLOG("WARHOG", "Created file: %s", currentFilename.c_str());
         } else {
-            Serial.printf("[WARHOG] Failed to create: %s\n", currentFilename.c_str());
+            SDLOG("WARHOG", "Failed to create: %s", currentFilename.c_str());
             return;
         }
     }
@@ -422,11 +458,13 @@ void WarhogMode::saveNewEntries() {
     // Append unsaved entries that have GPS coordinates
     File f = SD.open(currentFilename.c_str(), FILE_APPEND);
     if (!f) {
-        Serial.printf("[WARHOG] Failed to append to %s\n", currentFilename.c_str());
+        SDLOG("WARHOG", "Failed to append to %s", currentFilename.c_str());
         return;
     }
     
     uint32_t newSaved = 0;
+    uint32_t skippedNoCoords = 0;
+    uint32_t skippedAlreadySaved = 0;
     for (auto& e : entries) {
         // Only save if not already saved AND has GPS coordinates
         if (!e.saved && e.latitude != 0 && e.longitude != 0) {
@@ -445,15 +483,18 @@ void WarhogMode::saveNewEntries() {
             e.saved = true;
             newSaved++;
             savedCount++;
+        } else if (e.saved) {
+            skippedAlreadySaved++;
+        } else {
+            skippedNoCoords++;
         }
     }
     
     f.flush();  // Ensure data hits SD immediately (crash protection)
     f.close();
     
-    if (newSaved > 0) {
-        Serial.printf("[WARHOG] Saved %lu entries (total: %lu)\n", newSaved, savedCount);
-    }
+    SDLOG("WARHOG", "Saved %lu entries (skipped: %lu no coords, %lu already saved)", 
+          newSaved, skippedNoCoords, skippedAlreadySaved);
 }
 
 bool WarhogMode::hasGPSFix() {

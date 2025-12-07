@@ -68,6 +68,8 @@ private:
     static bool running;
     static uint32_t lastScanTime;
     static uint32_t scanInterval;
+    static bool scanInProgress;
+    static uint32_t scanStartTime;
     
     static std::vector<WardrivingEntry> entries;
     static size_t newCount;

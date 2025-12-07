@@ -6,6 +6,7 @@
 #include <M5Unified.h>
 #include "core/porkchop.h"
 #include "core/config.h"
+#include "core/sdlog.h"
 #include "ui/display.h"
 #include "gps/gps.h"
 #include "piglet/avatar.h"
@@ -35,6 +36,9 @@ void setup() {
     if (!Config::init()) {
         Serial.println("[MAIN] Config init failed, using defaults");
     }
+    
+    // Init SD logging (will be enabled via settings if user wants)
+    SDLog::init();
     
     // Init display system
     Display::init();

@@ -86,6 +86,12 @@ void Display::update() {
         case PorkchopMode::FILE_TRANSFER:
             drawFileTransferScreen(mainCanvas);
             break;
+            
+        case PorkchopMode::LOG_VIEWER:
+            // LogViewer handles main canvas rendering, but we still draw bars
+            drawTopBar();
+            drawBottomBar();
+            return;
     }
     
     drawBottomBar();
@@ -141,6 +147,9 @@ void Display::drawTopBar() {
         case PorkchopMode::FILE_TRANSFER:
             modeStr = "XFER";
             modeColor = COLOR_SUCCESS;
+            break;
+        case PorkchopMode::LOG_VIEWER:
+            modeStr = "LOG VIEWER";
             break;
     }
     
@@ -346,6 +355,28 @@ void Display::showProgress(const String& title, uint8_t percent) {
     // Percentage text
     mainCanvas.setTextSize(1);
     mainCanvas.drawString(String(percent) + "%", DISPLAY_W / 2, barY + barH + 10);
+    
+    pushAll();
+}
+
+void Display::showToast(const String& message) {
+    // Draw a centered pink box with black text - inverted from normal theme
+    int boxW = 160;
+    int boxH = 50;
+    int boxX = (DISPLAY_W - boxW) / 2;
+    int boxY = (MAIN_H - boxH) / 2;
+    
+    mainCanvas.fillSprite(COLOR_BG);
+    
+    // Pink filled box with slight padding for border effect
+    mainCanvas.fillRoundRect(boxX, boxY, boxW, boxH, 8, COLOR_FG);
+    
+    // Black text on pink background
+    mainCanvas.setTextColor(COLOR_BG, COLOR_FG);
+    mainCanvas.setTextDatum(MC_DATUM);
+    mainCanvas.setTextSize(1);
+    mainCanvas.setFont(&fonts::Font0);
+    mainCanvas.drawString(message, DISPLAY_W / 2, boxY + boxH / 2);
     
     pushAll();
 }

@@ -3,6 +3,7 @@
 #include "settings_menu.h"
 #include "display.h"
 #include "../core/config.h"
+#include "../core/sdlog.h"
 #include <M5Cardputer.h>
 
 // Static member initialization
@@ -136,6 +137,14 @@ void SettingsMenu::loadFromConfig() {
         0, 1, 1, "", ""  // Will display as Basic/Enhanced in render
     });
     
+    // SD Card Logging
+    items.push_back({
+        "SD Log",
+        SettingType::TOGGLE,
+        SDLog::isEnabled() ? 1 : 0,
+        0, 1, 1, "", ""
+    });
+    
     // Save & Exit action
     items.push_back({
         "< Save & Exit >",
@@ -180,6 +189,9 @@ void SettingsMenu::saveToConfig() {
     auto& m = Config::ml();
     m.collectionMode = static_cast<MLCollectionMode>(items[12].value);
     Config::setML(m);
+    
+    // SD Logging
+    SDLog::setEnabled(items[13].value == 1);
     
     // Save to file
     Config::save();

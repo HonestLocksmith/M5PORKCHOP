@@ -177,6 +177,35 @@ void SettingsMenu::loadFromConfig() {
         "Debug spam to SD"
     });
     
+    // === BLE / PIGGY BLUES Settings ===
+    
+    // BLE Burst Interval (ms between advertisements)
+    items.push_back({
+        "BLE Burst",
+        SettingType::VALUE,
+        (int)Config::ble().burstInterval,
+        50, 500, 50, "ms", "",
+        "Attack speed"
+    });
+    
+    // BLE Advertisement Duration
+    items.push_back({
+        "BLE Adv Time",
+        SettingType::VALUE,
+        (int)Config::ble().advDuration,
+        50, 200, 25, "ms", "",
+        "Per-packet duration"
+    });
+    
+    // BLE Rescan Interval (seconds)
+    items.push_back({
+        "BLE Rescan",
+        SettingType::VALUE,
+        (int)Config::ble().rescanInterval,
+        30, 120, 15, "s", "",
+        "Target refresh rate"
+    });
+    
     // Save & Exit action
     items.push_back({
         "< Save & Exit >",
@@ -235,6 +264,13 @@ void SettingsMenu::saveToConfig() {
     
     // SD Logging
     SDLog::setEnabled(items[15].value == 1);
+    
+    // BLE settings (PIGGY BLUES)
+    auto& b = Config::ble();
+    b.burstInterval = items[16].value;
+    b.advDuration = items[17].value;
+    b.rescanInterval = items[18].value;
+    Config::setBLE(b);
     
     // Save to file
     Config::save();

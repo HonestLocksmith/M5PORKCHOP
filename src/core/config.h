@@ -48,6 +48,14 @@ struct WiFiConfig {
     bool autoConnect = false;
 };
 
+// BLE settings for PIGGY BLUES mode
+struct BLEConfig {
+    uint16_t burstInterval = 200;       // ms between advertisement bursts (50-500)
+    uint16_t advDuration = 100;         // ms per advertisement (50-200)
+    uint16_t scanDuration = 3000;       // Device scan duration (1000-10000)
+    uint16_t rescanInterval = 60;       // Seconds between rescans (30-120)
+};
+
 // Personality settings
 struct PersonalityConfig {
     char name[32] = "Porkchop";
@@ -74,18 +82,21 @@ public:
     static GPSConfig& gps() { return gpsConfig; }
     static MLConfig& ml() { return mlConfig; }
     static WiFiConfig& wifi() { return wifiConfig; }
+    static BLEConfig& ble() { return bleConfig; }
     static PersonalityConfig& personality() { return personalityConfig; }
     
     // Setters with auto-save
     static void setGPS(const GPSConfig& cfg);
     static void setML(const MLConfig& cfg);
     static void setWiFi(const WiFiConfig& cfg);
+    static void setBLE(const BLEConfig& cfg);
     static void setPersonality(const PersonalityConfig& cfg);
     
 private:
     static GPSConfig gpsConfig;
     static MLConfig mlConfig;
     static WiFiConfig wifiConfig;
+    static BLEConfig bleConfig;
     static PersonalityConfig personalityConfig;
     static bool initialized;
     

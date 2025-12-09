@@ -10,6 +10,7 @@
 GPSConfig Config::gpsConfig;
 MLConfig Config::mlConfig;
 WiFiConfig Config::wifiConfig;
+BLEConfig Config::bleConfig;
 PersonalityConfig Config::personalityConfig;
 bool Config::initialized = false;
 static bool sdAvailable = false;
@@ -109,6 +110,14 @@ bool Config::load() {
         wifiConfig.otaSSID = doc["wifi"]["otaSSID"] | "";
         wifiConfig.otaPassword = doc["wifi"]["otaPassword"] | "";
         wifiConfig.autoConnect = doc["wifi"]["autoConnect"] | false;
+    }
+    
+    // BLE config (PIGGY BLUES)
+    if (doc["ble"].is<JsonObject>()) {
+        bleConfig.burstInterval = doc["ble"]["burstInterval"] | 200;
+        bleConfig.advDuration = doc["ble"]["advDuration"] | 100;
+        bleConfig.scanDuration = doc["ble"]["scanDuration"] | 3000;
+        bleConfig.rescanInterval = doc["ble"]["rescanInterval"] | 60;
     }
     
     Serial.println("[CONFIG] Loaded successfully");
@@ -211,6 +220,12 @@ bool Config::save() {
     doc["wifi"]["otaPassword"] = wifiConfig.otaPassword;
     doc["wifi"]["autoConnect"] = wifiConfig.autoConnect;
     
+    // BLE config (PIGGY BLUES)
+    doc["ble"]["burstInterval"] = bleConfig.burstInterval;
+    doc["ble"]["advDuration"] = bleConfig.advDuration;
+    doc["ble"]["scanDuration"] = bleConfig.scanDuration;
+    doc["ble"]["rescanInterval"] = bleConfig.rescanInterval;
+    
     File file = SD.open(CONFIG_FILE, FILE_WRITE);
     if (!file) {
         return false;
@@ -225,6 +240,7 @@ bool Config::createDefaultConfig() {
     gpsConfig = GPSConfig();
     mlConfig = MLConfig();
     wifiConfig = WiFiConfig();
+    bleConfig = BLEConfig();
     return true;
 }
 
@@ -251,6 +267,11 @@ void Config::setML(const MLConfig& cfg) {
 
 void Config::setWiFi(const WiFiConfig& cfg) {
     wifiConfig = cfg;
+    save();
+}
+
+void Config::setBLE(const BLEConfig& cfg) {
+    bleConfig = cfg;
     save();
 }
 

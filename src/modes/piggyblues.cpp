@@ -15,17 +15,23 @@ extern "C" {
 #include "nimble/nimble/host/include/host/ble_gap.h"
 }
 
-// ============ Timing Constants ============
-static const uint16_t BLE_BURST_INTERVAL_MS = 200;      // Time between advertisement bursts
-static const uint16_t BLE_ADV_DURATION_MS = 100;        // How long each advertisement runs
-static const uint16_t BLE_SCAN_DURATION_MS = 3000;      // Device scan duration
-static const uint32_t BLE_RESCAN_INTERVAL_MS = 60000;   // Periodic rescan interval
+// ============ Timing Constants (defaults, Config::ble() overrides) ============
+static const uint16_t DEFAULT_BURST_INTERVAL_MS = 200;  // Time between advertisement bursts
+static const uint16_t DEFAULT_ADV_DURATION_MS = 100;    // How long each advertisement runs
+static const uint16_t DEFAULT_SCAN_DURATION_MS = 3000;  // Device scan duration
+static const uint16_t DEFAULT_RESCAN_INTERVAL_S = 60;   // Periodic rescan interval (seconds)
 static const uint16_t BLE_STACK_SETTLE_MS = 100;        // Delay for BLE stack to settle
 static const uint16_t BLE_OP_DELAY_MS = 50;             // Short delay between BLE operations
 static const uint16_t BLE_ADV_MIN_INTERVAL = 32;        // 20ms (32 * 0.625ms)
 static const uint16_t BLE_ADV_MAX_INTERVAL = 64;        // 40ms (64 * 0.625ms)
 static const uint8_t  MAX_ACTIVE_TARGETS = 4;           // Maximum targets to track
 static const uint8_t  MAX_TARGETS_FOR_MOOD = 255;       // Cap for uint8_t mood parameter
+
+// Runtime config values (loaded from Config::ble())
+static uint16_t cfgBurstInterval = DEFAULT_BURST_INTERVAL_MS;
+static uint16_t cfgAdvDuration = DEFAULT_ADV_DURATION_MS;
+static uint16_t cfgScanDuration = DEFAULT_SCAN_DURATION_MS;
+static uint32_t cfgRescanIntervalMs = DEFAULT_RESCAN_INTERVAL_S * 1000;
 
 // Static members
 bool PiggyBluesMode::running = false;
@@ -216,7 +222,14 @@ void PiggyBluesMode::init() {
     running = false;
     confirmed = false;
     lastBurstTime = 0;
-    burstInterval = BLE_BURST_INTERVAL_MS;  // Use constant
+    
+    // Load config values
+    cfgBurstInterval = Config::ble().burstInterval;
+    cfgAdvDuration = Config::ble().advDuration;
+    cfgScanDuration = Config::ble().scanDuration;
+    cfgRescanIntervalMs = (uint32_t)Config::ble().rescanInterval * 1000;
+    
+    burstInterval = cfgBurstInterval;
     targets.clear();
     activeCount = 0;
     totalPackets = 0;
@@ -230,7 +243,8 @@ void PiggyBluesMode::init() {
     lastScanTime = 0;
     lastMoodUpdateTime = 0;
     
-    Serial.println("[PIGGYBLUES] Initialized");
+    Serial.printf("[PIGGYBLUES] Initialized (burst:%dms adv:%dms scan:%dms rescan:%ds)\n",
+                  cfgBurstInterval, cfgAdvDuration, cfgScanDuration, Config::ble().rescanInterval);
 }
 
 bool PiggyBluesMode::showWarningDialog() {
@@ -383,8 +397,8 @@ void PiggyBluesMode::update() {
     
     uint32_t now = millis();
     
-    // Periodic rescan (scan takes 3s, minimizes attack gaps)
-    if (now - lastScanTime > BLE_RESCAN_INTERVAL_MS) {
+    // Periodic rescan (uses config interval)
+    if (now - lastScanTime > cfgRescanIntervalMs) {
         scanForDevices();
         lastScanTime = now;
     }
@@ -432,8 +446,8 @@ void PiggyBluesMode::scanForDevices() {
     
     // NimBLE 2.x: For blocking scan, pass duration and blocking=true
     // The results are returned directly from start()
-    Serial.printf("[PIGGYBLUES] Starting %dms scan...\n", BLE_SCAN_DURATION_MS);
-    NimBLEScanResults results = pScan->getResults(BLE_SCAN_DURATION_MS);
+    Serial.printf("[PIGGYBLUES] Starting %dms scan...\n", cfgScanDuration);
+    NimBLEScanResults results = pScan->getResults(cfgScanDuration);
     
     Serial.printf("[PIGGYBLUES] Scan complete, count: %d\n", results.getCount());
     
@@ -556,7 +570,7 @@ void PiggyBluesMode::sendAppleJuice() {
     
     // Start advertising briefly
     if (pAdvertising->start()) {
-        delay(BLE_ADV_DURATION_MS);
+        delay(cfgAdvDuration);
         pAdvertising->stop();
     }
     
@@ -589,7 +603,7 @@ void PiggyBluesMode::sendAndroidFastPair() {
     pAdvertising->setAdvertisementData(advData);
     
     if (pAdvertising->start()) {
-        delay(BLE_ADV_DURATION_MS);
+        delay(cfgAdvDuration);
         pAdvertising->stop();
     }
     
@@ -618,7 +632,7 @@ void PiggyBluesMode::sendSamsungSpam() {
     }
     
     if (pAdvertising->start()) {
-        delay(BLE_ADV_DURATION_MS);
+        delay(cfgAdvDuration);
         pAdvertising->stop();
     }
     
@@ -652,7 +666,7 @@ void PiggyBluesMode::sendWindowsSwiftPair() {
     pAdvertising->setAdvertisementData(advData);
     
     if (pAdvertising->start()) {
-        delay(BLE_ADV_DURATION_MS);
+        delay(cfgAdvDuration);
         pAdvertising->stop();
     }
     

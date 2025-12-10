@@ -133,11 +133,12 @@
         * 22MHz channel width represented accurately (sigma ~6.6 pixels)
         * Channel hopping at 100ms per channel (~1.3s full sweep)
         * Lobe height based on RSSI - stronger signal = taller peak
-        * Color-coded by encryption: green=WPA2/3, yellow=WPA, red=open/WEP
+        * [VULN!] indicator for weak security (OPEN/WEP/WPA1)
+        * [DEAUTH] indicator for networks without PMF protection
         * Network selection via ; and . - scroll through discovered APs
         * Enter key shows network details (SSID, BSSID, RSSI, channel, auth)
         * Bottom bar shows selected network info or scan status
-        * Stale networks fade after 10 seconds - real-time accuracy
+        * Stale networks removed after 5 seconds - real-time accuracy
 
     The spectrum view shows what's actually happening on the airwaves.
     Each lobe represents a network's signal bleeding across adjacent
@@ -265,7 +266,7 @@
 
 ----[ 3.9 - Achievements
 
-    16 secret badges to prove you're not just grinding mindlessly.
+    47 secret badges to prove you're not just grinding mindlessly.
     Or maybe you are. Either way, proof of pwn.
 
     The Achievements menu shows what you've earned. Locked ones show

@@ -279,11 +279,10 @@ Real-time WiFi spectrum analyzer that visualizes 2.4GHz band activity with Gauss
 ### Visualization
 - Gaussian lobes with sigma ~6.6 pixels (22MHz channel width)
 - Lobe height based on RSSI - stronger signal = taller peak
-- Color-coded by encryption:
-  - **Green**: WPA2/WPA3
-  - **Yellow**: WPA/WPA1
-  - **Red**: Open/WEP
-- Stale networks fade after 5 seconds
+- Monochrome pink (COLOR_FG) - no color coding
+- **[VULN!]** indicator for weak security (OPEN/WEP/WPA1)
+- **[DEAUTH]** indicator for networks without PMF protection
+- Stale networks removed after 5 seconds
 
 ### Channel Hopping
 - 100ms per channel = ~1.3s full sweep across channels 1-13

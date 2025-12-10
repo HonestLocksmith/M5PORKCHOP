@@ -43,20 +43,20 @@
 
     The test/ folder is laid out like this:
 
-    +----------------------------------------------+------------------------+
-    | Path                                         | What it does           |
-    +----------------------------------------------+------------------------+
-    | mocks/mock_arduino.h                         | Arduino type stubs     |
-    | mocks/mock_esp_wifi.h                        | ESP32 WiFi type stubs  |
-    | mocks/mock_preferences.h                     | NVS storage mock       |
-    | mocks/testable_functions.h                   | Pure functions to test |
-    +----------------------------------------------+------------------------+
-    | test_xp/test_xp_levels.cpp                   | XP system (39 tests)   |
-    | test_distance/test_distance.cpp              | GPS distance (16 tests)|
-    | test_features/test_feature_extraction.cpp    | ML features (27 tests) |
-    | test_beacon/test_beacon_parsing.cpp          | Beacon parsing (19 tests) |
-    | test_classifier/test_heuristic_classifier.cpp| Anomaly scoring (26 tests)|
-    +----------------------------------------------+------------------------+
+    +-----------------------------------------------+---------------------------+
+    | Path                                          | What it does              |
+    +-----------------------------------------------+---------------------------+
+    | mocks/mock_arduino.h                          | Arduino type stubs        |
+    | mocks/mock_esp_wifi.h                         | ESP32 WiFi type stubs     |
+    | mocks/mock_preferences.h                      | NVS storage mock          |
+    | mocks/testable_functions.h                    | Pure functions to test    |
+    +-----------------------------------------------+---------------------------+
+    | test_xp/test_xp_levels.cpp                    | XP system (39 tests)      |
+    | test_distance/test_distance.cpp               | GPS distance (16 tests)   |
+    | test_features/test_feature_extraction.cpp     | ML features (27 tests)    |
+    | test_beacon/test_beacon_parsing.cpp           | Beacon parsing (19 tests) |
+    | test_classifier/test_heuristic_classifier.cpp | Anomaly scoring (26 tests)|
+    +-----------------------------------------------+---------------------------+
 
     Each test lives in its own subdirectory so PlatformIO compiles them
     separately. This avoids linker conflicts with setUp/tearDown/main.

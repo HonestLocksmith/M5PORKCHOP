@@ -98,6 +98,7 @@ uint8_t currentHopIndex = 0;
 // Memory limits to prevent OOM
 const size_t MAX_NETWORKS = 200;       // Max tracked networks
 const size_t MAX_HANDSHAKES = 50;      // Max handshakes (each can be large)
+const size_t MAX_PMKIDS = 50;          // Max PMKIDs (smaller than handshakes)
 
 // Deauth timing
 static uint32_t lastDeauthTime = 0;
@@ -149,7 +150,7 @@ void OinkMode::init() {
     
     networks.clear();
     handshakes.clear();
-    pmkids.clear();;
+    pmkids.clear();
     targetIndex = -1;
     memset(targetBssid, 0, 6);
     selectionIndex = 0;
@@ -1002,10 +1003,12 @@ void OinkMode::processEAPOL(const uint8_t* payload, uint16_t len,
     }
     
     // ========== PMKID EXTRACTION FROM M1 ==========
-    // PMKID is in Key Data field of M1 when AP supports it
-    // EAPOL-Key frame: ... key_data_length(2) @ offset 97-98, key_data @ offset 99
+    // PMKID is in Key Data field of M1 when AP supports it (WPA2/WPA3 only)
+    // EAPOL-Key frame: descriptor_type(1) @ offset 4, key_data_length(2) @ offset 97-98, key_data @ offset 99
     // Key Data contains RSN IE with PMKID: dd 14 00 0f ac 04 [16-byte PMKID]
-    if (messageNum == 1 && len >= 121) {  // 99 + 22 bytes minimum for PMKID
+    // Only RSN (descriptor type 0x02) has PMKID - WPA1 (0xFE) does not
+    uint8_t descriptorType = payload[4];
+    if (messageNum == 1 && descriptorType == 0x02 && len >= 121) {  // RSN + 99 + 22 bytes minimum
         uint16_t keyDataLen = (payload[97] << 8) | payload[98];
         
         // PMKID Key Data is exactly 22 bytes: dd(1) + len(1) + OUI(3) + type(1) + PMKID(16)
@@ -1158,7 +1161,7 @@ int OinkMode::findOrCreatePMKID(const uint8_t* bssid, const uint8_t* station) {
     }
     
     // Limit PMKID count to prevent OOM
-    if (pmkids.size() >= MAX_HANDSHAKES) {
+    if (pmkids.size() >= MAX_PMKIDS) {
         return -1;
     }
     
@@ -1218,6 +1221,9 @@ void OinkMode::autoSaveCheck() {
             }
         }
     }
+    
+    // Also save any unsaved PMKIDs
+    saveAllPMKIDs();
 }
 
 // PCAP file format structures
@@ -1411,28 +1417,33 @@ bool OinkMode::savePMKID22000(const CapturedPMKID& p, const char* path) {
 bool OinkMode::saveAllPMKIDs() {
     if (!Config::isSDAvailable()) return false;
     
+    // Ensure directory exists
+    if (!SD.exists("/handshakes")) {
+        SD.mkdir("/handshakes");
+    }
+    
     bool success = true;
     for (auto& p : pmkids) {
         if (!p.saved && p.ssid[0] != 0) {
+            // Use BSSID-based filename in /handshakes/ (same as handshakes, but .22000 extension)
             char filename[64];
-            // Sanitize SSID for filename
-            char safeSsid[17];
-            int j = 0;
-            for (int i = 0; i < 16 && p.ssid[i]; i++) {
-                char c = p.ssid[i];
-                if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || 
-                    (c >= '0' && c <= '9') || c == '-' || c == '_') {
-                    safeSsid[j++] = c;
-                }
-            }
-            safeSsid[j] = 0;
-            if (j == 0) strcpy(safeSsid, "unknown");
-            
-            snprintf(filename, sizeof(filename), "/pmkid_%s_%02X%02X.22000",
-                     safeSsid, p.bssid[4], p.bssid[5]);
+            snprintf(filename, sizeof(filename), "/handshakes/%02X%02X%02X%02X%02X%02X.22000",
+                     p.bssid[0], p.bssid[1], p.bssid[2],
+                     p.bssid[3], p.bssid[4], p.bssid[5]);
             
             if (savePMKID22000(p, filename)) {
                 p.saved = true;
+                
+                // Save SSID to companion .txt file (same pattern as handshakes)
+                char txtFilename[64];
+                snprintf(txtFilename, sizeof(txtFilename), "/handshakes/%02X%02X%02X%02X%02X%02X_pmkid.txt",
+                         p.bssid[0], p.bssid[1], p.bssid[2],
+                         p.bssid[3], p.bssid[4], p.bssid[5]);
+                File txtFile = SD.open(txtFilename, FILE_WRITE);
+                if (txtFile) {
+                    txtFile.println(p.ssid);
+                    txtFile.close();
+                }
             } else {
                 success = false;
             }

@@ -377,7 +377,8 @@ uint32_t Porkchop::getUptime() const {
 }
 
 uint16_t Porkchop::getHandshakeCount() const {
-    return OinkMode::getCompleteHandshakeCount();
+    // Include both handshakes and PMKIDs - both are crackable captures
+    return OinkMode::getCompleteHandshakeCount() + OinkMode::getPMKIDCount();
 }
 
 uint16_t Porkchop::getNetworkCount() const {

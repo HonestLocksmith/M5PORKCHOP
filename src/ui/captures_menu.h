@@ -11,6 +11,7 @@ struct CaptureInfo {
     String bssid;
     uint32_t fileSize;
     time_t captureTime;  // File modification time
+    bool isPMKID;        // true = .22000 PMKID, false = .pcap handshake
 };
 
 class CapturesMenu {

@@ -48,13 +48,17 @@ void CapturesMenu::scanCaptures() {
     File file = dir.openNextFile();
     while (file) {
         String name = file.name();
-        if (name.endsWith(".pcap")) {
+        bool isPCAP = name.endsWith(".pcap");
+        bool isPMKID = name.endsWith(".22000");
+        
+        if (isPCAP || isPMKID) {
             CaptureInfo info;
             info.filename = name;
             info.fileSize = file.size();
             info.captureTime = file.getLastWrite();
+            info.isPMKID = isPMKID;  // Track capture type
             
-            // Extract BSSID from filename (e.g., "64EEB7208286.pcap")
+            // Extract BSSID from filename (e.g., "64EEB7208286.pcap" or "64EEB7208286.22000")
             String baseName = name.substring(0, name.indexOf('.'));
             if (baseName.length() >= 12) {
                 info.bssid = baseName.substring(0, 2) + ":" +
@@ -68,7 +72,10 @@ void CapturesMenu::scanCaptures() {
             }
             
             // Try to get SSID from companion .txt file if exists
-            String txtPath = "/handshakes/" + baseName + ".txt";
+            // PMKID uses _pmkid.txt suffix, handshake uses .txt
+            String txtPath = isPMKID ? 
+                "/handshakes/" + baseName + "_pmkid.txt" :
+                "/handshakes/" + baseName + ".txt";
             if (SD.exists(txtPath)) {
                 File txtFile = SD.open(txtPath, FILE_READ);
                 if (txtFile) {
@@ -187,9 +194,10 @@ void CapturesMenu::draw(M5Canvas& canvas) {
             canvas.setTextColor(COLOR_FG);
         }
         
-        // SSID (truncated if needed)
+        // SSID (truncated if needed) - show [P] prefix for PMKID
         canvas.setCursor(4, y);
-        String displaySSID = cap.ssid;
+        String displaySSID = cap.isPMKID ? "[P]" : "";
+        displaySSID += cap.ssid;
         if (displaySSID.length() > 14) {
             displaySSID = displaySSID.substring(0, 12) + "..";
         }

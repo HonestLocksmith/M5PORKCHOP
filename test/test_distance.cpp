@@ -73,13 +73,13 @@ void test_haversine_north_pole_region(void) {
     // Two points at 89N but 90 degrees apart in longitude
     double d = haversineMeters(89.0, 0.0, 89.0, 90.0);
     // At 89N, the distance should be much less than at equator
-    TEST_ASSERT_LESS_THAN_DOUBLE(500000.0, d);  // Less than 500km
+    TEST_ASSERT_TRUE(d < 500000.0);  // Less than 500km
 }
 
 void test_haversine_south_pole_region(void) {
     // Near south pole
     double d = haversineMeters(-89.0, 0.0, -89.0, 90.0);
-    TEST_ASSERT_LESS_THAN_DOUBLE(500000.0, d);
+    TEST_ASSERT_TRUE(d < 500000.0);  // Less than 500km
 }
 
 void test_haversine_antipodal_points(void) {

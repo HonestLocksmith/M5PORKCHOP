@@ -551,6 +551,7 @@ ACH_CHAOS_AGENT     = 1 << 15  // 1000 BLE packets
 
 - Shows all 16 achievements with `[X]` unlocked / `[ ]` locked
 - Locked achievements show `???` for name (no spoilers)
+- Bottom bar shows unlock description for selected achievement, or "UNKNOWN" if locked
 - Enter key shows toast-style detail popup (pink bg, black text)
 - Detail shows achievement name, UNLOCKED/LOCKED status, unlock condition
 - Uses only system colors (COLOR_FG/COLOR_BG)

@@ -563,33 +563,78 @@ L19: TRUFFLE R00T        L39: PHIBER 0PT1K
 L20: INJECT P1G          L40: MUDGE UNCHA1NED
 ```
 
-### Achievements (17 Bitflags)
-17 secret badges stored in `data.achievements` bitfield. Viewable via Achievements menu.
+### Achievements (47 Bitflags)
+47 secret badges stored in `data.achievements` uint64_t bitfield. Viewable via Achievements menu.
 
 ```cpp
-ACH_FIRST_BLOOD     = 1 << 0   // First handshake
-ACH_CENTURION       = 1 << 1   // 100 networks in one session
-ACH_MARATHON_PIG    = 1 << 2   // 10km walked in session
-ACH_NIGHT_OWL       = 1 << 3   // Hunt between midnight-5am
-ACH_GHOST_HUNTER    = 1 << 4   // 10 hidden networks
-ACH_APPLE_FARMER    = 1 << 5   // 100 Apple BLE packets
-ACH_WARDRIVER       = 1 << 6   // 1000 networks lifetime
-ACH_DEAUTH_KING     = 1 << 7   // 100 successful deauths
-ACH_PMKID_HUNTER    = 1 << 8   // Capture PMKID
-ACH_WPA3_SPOTTER    = 1 << 9   // Find WPA3 network
-ACH_GPS_MASTER      = 1 << 10  // 100 GPS-tagged networks
-ACH_TOUCH_GRASS     = 1 << 11  // 50km total lifetime
-ACH_SILICON_PSYCHO  = 1 << 12  // 5000 networks lifetime
-ACH_CLUTCH_CAPTURE  = 1 << 13  // Handshake at <10% battery
-ACH_SPEED_RUN       = 1 << 14  // 50 networks in 10 minutes
-ACH_CHAOS_AGENT     = 1 << 15  // 1000 BLE packets
-ACH_NIETZSWINE      = 1 << 16  // Stare at spectrum for 15 minutes
+// Original achievements (bits 0-16)
+ACH_FIRST_BLOOD     = 1ULL << 0   // First handshake
+ACH_CENTURION       = 1ULL << 1   // 100 networks in one session
+ACH_MARATHON_PIG    = 1ULL << 2   // 10km walked in session
+ACH_NIGHT_OWL       = 1ULL << 3   // Hunt between midnight-5am
+ACH_GHOST_HUNTER    = 1ULL << 4   // 10 hidden networks
+ACH_APPLE_FARMER    = 1ULL << 5   // 100 Apple BLE packets
+ACH_WARDRIVER       = 1ULL << 6   // 1000 networks lifetime
+ACH_DEAUTH_KING     = 1ULL << 7   // 100 successful deauths
+ACH_PMKID_HUNTER    = 1ULL << 8   // Capture PMKID
+ACH_WPA3_SPOTTER    = 1ULL << 9   // Find WPA3 network
+ACH_GPS_MASTER      = 1ULL << 10  // 100 GPS-tagged networks
+ACH_TOUCH_GRASS     = 1ULL << 11  // 50km total lifetime
+ACH_SILICON_PSYCHO  = 1ULL << 12  // 5000 networks lifetime
+ACH_CLUTCH_CAPTURE  = 1ULL << 13  // Handshake at <10% battery
+ACH_SPEED_RUN       = 1ULL << 14  // 50 networks in 10 minutes
+ACH_CHAOS_AGENT     = 1ULL << 15  // 1000 BLE packets
+ACH_NIETZSWINE      = 1ULL << 16  // Stare at spectrum for 15 minutes
+
+// Network milestones (bits 17-21)
+ACH_TEN_THOUSAND    = 1ULL << 17  // 10,000 networks lifetime
+ACH_NEWB_SNIFFER    = 1ULL << 18  // First 10 networks
+ACH_FIVE_HUNDRED    = 1ULL << 19  // 500 networks in session
+ACH_OPEN_SEASON     = 1ULL << 20  // 50 open networks
+ACH_WEP_LOLZER      = 1ULL << 21  // Find a WEP network (ancient relic)
+
+// Handshake/PMKID milestones (bits 22-26)
+ACH_HANDSHAKE_HAM   = 1ULL << 22  // 10 handshakes lifetime
+ACH_FIFTY_SHAKES    = 1ULL << 23  // 50 handshakes lifetime
+ACH_PMKID_FIEND     = 1ULL << 24  // 10 PMKIDs captured
+ACH_TRIPLE_THREAT   = 1ULL << 25  // 3 handshakes in session
+ACH_HOT_STREAK      = 1ULL << 26  // 5 handshakes in session
+
+// Deauth milestones (bits 27-29)
+ACH_FIRST_DEAUTH    = 1ULL << 27  // First successful deauth
+ACH_DEAUTH_THOUSAND = 1ULL << 28  // 1000 successful deauths
+ACH_RAMPAGE         = 1ULL << 29  // 10 deauths in session
+
+// Distance/WARHOG milestones (bits 30-33)
+ACH_HALF_MARATHON   = 1ULL << 30  // 21km in session
+ACH_HUNDRED_KM      = 1ULL << 31  // 100km lifetime
+ACH_GPS_ADDICT      = 1ULL << 32  // 500 GPS-tagged networks
+ACH_ULTRAMARATHON   = 1ULL << 33  // 50km in session
+
+// BLE/PIGGYBLUES milestones (bits 34-38)
+ACH_PARANOID_ANDROID = 1ULL << 34 // 100 Android FastPair spam
+ACH_SAMSUNG_SPRAY   = 1ULL << 35  // 100 Samsung spam
+ACH_WINDOWS_PANIC   = 1ULL << 36  // 100 Windows SwiftPair spam
+ACH_BLE_BOMBER      = 1ULL << 37  // 5000 BLE packets
+ACH_OINKAGEDDON     = 1ULL << 38  // 10000 BLE packets
+
+// Time/session milestones (bits 39-42)
+ACH_SESSION_VET     = 1ULL << 39  // 100 sessions
+ACH_FOUR_HOUR_GRIND = 1ULL << 40  // 4 hour session
+ACH_EARLY_BIRD      = 1ULL << 41  // Active 5-7am
+ACH_WEEKEND_WARRIOR = 1ULL << 42  // Session on weekend
+
+// Special/rare (bits 43-46)
+ACH_ROGUE_SPOTTER   = 1ULL << 43  // ML detects rogue AP
+ACH_HIDDEN_MASTER   = 1ULL << 44  // 50 hidden networks
+ACH_WPA3_HUNTER     = 1ULL << 45  // 25 WPA3 networks
+ACH_MAX_LEVEL       = 1ULL << 46  // Reach level 40
 ```
 
 ### Achievements Menu
 `src/ui/achievements_menu.cpp/h` - Accessible from main menu ("ACHIEVEMENTS").
 
-- Shows all 17 achievements with `[X]` unlocked / `[ ]` locked
+- Shows all 47 achievements with `[X]` unlocked / `[ ]` locked
 - Locked achievements show `???` for name (no spoilers)
 - Bottom bar shows unlock description for selected achievement, or "UNKNOWN" if locked
 - Enter key shows toast-style detail popup (pink bg, black text)

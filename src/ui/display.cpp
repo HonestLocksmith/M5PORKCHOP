@@ -793,10 +793,6 @@ bool Display::takeScreenshot() {
     
     snapping = true;
     
-    // Show SNAP! toast first (will be visible in screenshot)
-    showToast("SNAP!");
-    delay(100);  // Brief delay so toast is visible
-    
     // Ensure screenshots directory exists
     if (!SD.exists("/screenshots")) {
         SD.mkdir("/screenshots");
@@ -887,9 +883,9 @@ bool Display::takeScreenshot() {
     
     Serial.printf("[DISPLAY] Screenshot saved: %s (%lu bytes)\n", path, filesize);
     
-    // Show success toast with filename
+    // Show success toast
     char msg[32];
-    snprintf(msg, sizeof(msg), "Saved #%d", num);
+    snprintf(msg, sizeof(msg), "SNAP! #%d", num);
     showToast(msg);
     
     snapping = false;

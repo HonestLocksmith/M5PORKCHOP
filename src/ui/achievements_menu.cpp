@@ -48,11 +48,13 @@ void AchievementsMenu::show() {
     scrollOffset = 0;
     showingDetail = false;
     keyWasPressed = true;  // Ignore the Enter that selected us from menu
+    updateBottomOverlay();
 }
 
 void AchievementsMenu::hide() {
     active = false;
     showingDetail = false;
+    Display::clearBottomOverlay();
 }
 
 void AchievementsMenu::update() {
@@ -86,6 +88,7 @@ void AchievementsMenu::handleInput() {
             if (selectedIndex < scrollOffset) {
                 scrollOffset = selectedIndex;
             }
+            updateBottomOverlay();
         }
     }
     
@@ -95,6 +98,7 @@ void AchievementsMenu::handleInput() {
             if (selectedIndex >= scrollOffset + VISIBLE_ITEMS) {
                 scrollOffset = selectedIndex - VISIBLE_ITEMS + 1;
             }
+            updateBottomOverlay();
         }
     }
     
@@ -205,4 +209,15 @@ void AchievementsMenu::drawDetail(M5Canvas& canvas) {
     
     // Reset text datum
     canvas.setTextDatum(top_left);
+}
+
+void AchievementsMenu::updateBottomOverlay() {
+    uint32_t unlocked = XP::getAchievements();
+    bool hasIt = (unlocked & ACHIEVEMENTS[selectedIndex].flag) != 0;
+    
+    if (hasIt) {
+        Display::setBottomOverlay(ACHIEVEMENTS[selectedIndex].howTo);
+    } else {
+        Display::setBottomOverlay("UNKNOWN");
+    }
 }

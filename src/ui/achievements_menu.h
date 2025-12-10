@@ -25,4 +25,5 @@ private:
     
     static void handleInput();
     static void drawDetail(M5Canvas& canvas);
+    static void updateBottomOverlay();
 };

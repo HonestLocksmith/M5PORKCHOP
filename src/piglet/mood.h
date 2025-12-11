@@ -9,6 +9,7 @@ public:
     static void init();
     static void update();
     static void draw(M5Canvas& canvas);
+    static void saveMood();  // Phase 10: Save mood to NVS
     
     // Mood triggers
     static void onHandshakeCaptured(const char* apName = nullptr);

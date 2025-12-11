@@ -5,6 +5,11 @@
 #include "../core/xp.h"
 #include "../ui/display.h"
 #include "../modes/oink.h"
+#include <Preferences.h>
+
+// Phase 10: Mood persistence
+static Preferences moodPrefs;
+static const char* MOOD_NVS_NAMESPACE = "porkmood";
 
 // Static members
 String Mood::currentPhrase = "oink";
@@ -378,7 +383,6 @@ const char* PHRASES_RARE[] = {
 
 void Mood::init() {
     currentPhrase = "oink";
-    happiness = 50;
     lastPhraseChange = millis();
     phraseInterval = 5000;
     lastActivityTime = millis();
@@ -389,6 +393,38 @@ void Mood::init() {
     
     // Reset phrase queue
     phraseQueueCount = 0;
+    
+    // Phase 10: Load saved mood from NVS
+    moodPrefs.begin(MOOD_NVS_NAMESPACE, true);  // Read-only
+    int8_t savedMood = moodPrefs.getChar("mood", 50);
+    uint32_t savedTime = moodPrefs.getULong("time", 0);
+    moodPrefs.end();
+    
+    // Calculate time since last save
+    uint32_t now = millis();  // Can't compare to NVS time directly, use as session marker
+    
+    // If we have a saved mood, restore with some decay
+    if (savedTime > 0) {
+        // Start with saved mood, slightly regressed toward neutral
+        happiness = savedMood + (50 - savedMood) / 4;  // 25% toward neutral
+        
+        // Welcome back phrase based on saved mood
+        if (savedMood > 60) {
+            currentPhrase = "missed me piggy?";
+        } else if (savedMood < -20) {
+            currentPhrase = "back for more..";
+        }
+    } else {
+        happiness = 50;
+    }
+}
+
+// Phase 10: Save mood to NVS (call on mode exit or periodically)
+void Mood::saveMood() {
+    moodPrefs.begin(MOOD_NVS_NAMESPACE, false);  // Read-write
+    moodPrefs.putChar("mood", (int8_t)constrain(happiness, -100, 100));
+    moodPrefs.putULong("time", millis());
+    moodPrefs.end();
 }
 
 void Mood::update() {
@@ -461,6 +497,13 @@ void Mood::update() {
         currentPhrase = "DOUBLE DIGITS!";
         applyMomentumBoost(30);
         lastPhraseChange = now;
+    }
+    
+    // Phase 10: Periodic mood save (every 60 seconds)
+    static uint32_t lastMoodSave = 0;
+    if (now - lastMoodSave > 60000) {
+        saveMood();
+        lastMoodSave = now;
     }
     
     // Check for inactivity

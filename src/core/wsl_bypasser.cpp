@@ -8,6 +8,7 @@
 #include "wsl_bypasser.h"
 #include <esp_wifi.h>
 #include <esp_system.h>
+#include <esp_random.h>
 
 extern "C" {
 
@@ -31,6 +32,27 @@ void init() {
     // Log that bypass is active
     Serial.println("[WSL] Frame validation bypass active (-zmuldefs)");
     initialized = true;
+}
+
+void randomizeMAC() {
+    uint8_t mac[6];
+    
+    // Generate random MAC using hardware RNG
+    esp_fill_random(mac, 6);
+    
+    // Set locally administered bit (bit 1 of first byte) and clear multicast bit (bit 0)
+    // This marks it as a valid unicast locally-administered address
+    mac[0] = (mac[0] & 0xFC) | 0x02;
+    
+    // Apply the new MAC address
+    esp_err_t result = esp_wifi_set_mac(WIFI_IF_STA, mac);
+    
+    if (result == ESP_OK) {
+        Serial.printf("[WSL] MAC randomized: %02X:%02X:%02X:%02X:%02X:%02X\n",
+                      mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    } else {
+        Serial.printf("[WSL] MAC randomization failed: %d\n", result);
+    }
 }
 
 bool sendDeauthFrame(const uint8_t* bssid, uint8_t channel, const uint8_t* staMac, uint8_t reason) {

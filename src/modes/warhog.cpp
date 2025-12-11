@@ -2,6 +2,7 @@
 
 #include "warhog.h"
 #include "../core/config.h"
+#include "../core/wsl_bypasser.h"
 #include "../core/sdlog.h"
 #include "../core/xp.h"
 #include "../ui/display.h"
@@ -166,6 +167,12 @@ void WarhogMode::start() {
     WiFi.mode(WIFI_OFF);    // Turn off WiFi completely
     delay(200);             // Let it settle
     WiFi.mode(WIFI_STA);    // Station mode for scanning
+    
+    // Randomize MAC if enabled (stealth)
+    if (Config::wifi().randomizeMAC) {
+        WSLBypasser::randomizeMAC();
+    }
+    
     delay(200);             // Let it initialize
     
     // Reset scan state (critical for proper operation after restart)

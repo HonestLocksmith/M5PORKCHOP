@@ -106,6 +106,15 @@ void SettingsMenu::loadFromConfig() {
         "Kick clients off APs"
     });
     
+    // MAC randomization for stealth
+    items.push_back({
+        "Rnd MAC",
+        SettingType::TOGGLE,
+        Config::wifi().randomizeMAC ? 1 : 0,
+        0, 1, 1, "", "",
+        "New MAC each mode start"
+    });
+    
     // GPS enabled
     items.push_back({
         "GPS",
@@ -230,6 +239,7 @@ void SettingsMenu::saveToConfig() {
     w.channelHopInterval = items[6].value;
     w.scanDuration = items[7].value;
     w.enableDeauth = items[8].value == 1;
+    w.randomizeMAC = items[9].value == 1;
     Config::setWiFi(w);
     
     // Sound, Brightness, and Dimming
@@ -246,30 +256,30 @@ void SettingsMenu::saveToConfig() {
     
     // GPS settings
     auto& g = Config::gps();
-    g.enabled = items[9].value == 1;
-    g.powerSave = items[10].value == 1;
-    g.updateInterval = items[11].value;  // Scan interval in seconds
+    g.enabled = items[10].value == 1;
+    g.powerSave = items[11].value == 1;
+    g.updateInterval = items[12].value;  // Scan interval in seconds
     
     // Convert baud index to actual baud rate
     static const uint32_t baudRates[] = {9600, 38400, 57600, 115200};
-    g.baudRate = baudRates[items[12].value];
+    g.baudRate = baudRates[items[13].value];
     
-    g.timezoneOffset = items[13].value;
+    g.timezoneOffset = items[14].value;
     Config::setGPS(g);
     
     // ML settings
     auto& m = Config::ml();
-    m.collectionMode = static_cast<MLCollectionMode>(items[14].value);
+    m.collectionMode = static_cast<MLCollectionMode>(items[15].value);
     Config::setML(m);
     
     // SD Logging
-    SDLog::setEnabled(items[15].value == 1);
+    SDLog::setEnabled(items[16].value == 1);
     
     // BLE settings (PIGGY BLUES)
     auto& b = Config::ble();
-    b.burstInterval = items[16].value;
-    b.advDuration = items[17].value;
-    b.rescanInterval = items[18].value;
+    b.burstInterval = items[17].value;
+    b.advDuration = items[18].value;
+    b.rescanInterval = items[19].value;
     Config::setBLE(b);
     
     // Save to file

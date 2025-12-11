@@ -2,6 +2,7 @@
 
 #include "spectrum.h"
 #include "../core/config.h"
+#include "../core/wsl_bypasser.h"
 #include "../core/xp.h"
 #include "../ui/display.h"
 #include <M5Cardputer.h>
@@ -67,6 +68,12 @@ void SpectrumMode::start() {
     
     // Initialize WiFi in promiscuous mode
     WiFi.mode(WIFI_STA);
+    
+    // Randomize MAC if enabled (stealth)
+    if (Config::wifi().randomizeMAC) {
+        WSLBypasser::randomizeMAC();
+    }
+    
     WiFi.disconnect();
     delay(100);
     

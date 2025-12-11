@@ -401,6 +401,68 @@ void Mood::update() {
         return;  // Don't do normal phrase cycling while queue active
     }
     
+    // Phase 9: Check for milestone celebrations
+    static uint32_t milestonesShown = 0;  // Bitfield of shown milestones
+    const SessionStats& sess = XP::getSession();
+    
+    // Network milestones: 10, 50, 100, 500, 1000
+    if (sess.networks >= 10 && !(milestonesShown & 0x01)) {
+        milestonesShown |= 0x01;
+        currentPhrase = "10 TRUFFLES BABY";
+        applyMomentumBoost(15);
+        lastPhraseChange = now;
+    } else if (sess.networks >= 50 && !(milestonesShown & 0x02)) {
+        milestonesShown |= 0x02;
+        queuePhrases("50 NETWORKS!", "oink oink oink", nullptr);
+        currentPhrase = "HALF CENTURY!";
+        applyMomentumBoost(20);
+        lastPhraseChange = now;
+    } else if (sess.networks >= 100 && !(milestonesShown & 0x04)) {
+        milestonesShown |= 0x04;
+        queuePhrases("THE BIG 100!", "centurion piggy", "unstoppable");
+        currentPhrase = "TRIPLE DIGITS!";
+        applyMomentumBoost(30);
+        lastPhraseChange = now;
+    } else if (sess.networks >= 500 && !(milestonesShown & 0x08)) {
+        milestonesShown |= 0x08;
+        queuePhrases("500 NETWORKS!", "legend mode", "wifi vacuum");
+        currentPhrase = "HALF A THOUSAND";
+        applyMomentumBoost(40);
+        lastPhraseChange = now;
+    }
+    // Distance milestones: 1km, 5km, 10km
+    else if (sess.distanceM >= 1000 && !(milestonesShown & 0x10)) {
+        milestonesShown |= 0x10;
+        currentPhrase = "1KM WALKED!";
+        applyMomentumBoost(15);
+        lastPhraseChange = now;
+    } else if (sess.distanceM >= 5000 && !(milestonesShown & 0x20)) {
+        milestonesShown |= 0x20;
+        queuePhrases("5KM COVERED!", "piggy parkour", nullptr);
+        currentPhrase = "SERIOUS WALKER";
+        applyMomentumBoost(25);
+        lastPhraseChange = now;
+    } else if (sess.distanceM >= 10000 && !(milestonesShown & 0x40)) {
+        milestonesShown |= 0x40;
+        queuePhrases("10KM LEGEND!", "marathon pig", "touch grass pro");
+        currentPhrase = "DOUBLE DIGITS KM";
+        applyMomentumBoost(35);
+        lastPhraseChange = now;
+    }
+    // Handshake milestones: 5, 10
+    else if (sess.handshakes >= 5 && !(milestonesShown & 0x80)) {
+        milestonesShown |= 0x80;
+        currentPhrase = "5 HANDSHAKES!";
+        applyMomentumBoost(20);
+        lastPhraseChange = now;
+    } else if (sess.handshakes >= 10 && !(milestonesShown & 0x100)) {
+        milestonesShown |= 0x100;
+        queuePhrases("10 HANDSHAKES!", "pwn master", nullptr);
+        currentPhrase = "DOUBLE DIGITS!";
+        applyMomentumBoost(30);
+        lastPhraseChange = now;
+    }
+    
     // Check for inactivity
     uint32_t inactiveSeconds = (now - lastActivityTime) / 1000;
     if (inactiveSeconds > 60) {

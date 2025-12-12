@@ -8,6 +8,7 @@
 #include "../ui/captures_menu.h"
 #include "../ui/achievements_menu.h"
 #include "../ui/log_viewer.h"
+#include "../ui/swine_stats.h"
 #include "../piglet/mood.h"
 #include "../piglet/avatar.h"
 #include "../modes/oink.h"
@@ -33,6 +34,9 @@ void Porkchop::init() {
     // Initialize XP system
     XP::init();
     
+    // Initialize SwineStats (buff/debuff system)
+    SwineStats::init();
+    
     // Register level up callback to show popup
     XP::setLevelUpCallback([](uint8_t oldLevel, uint8_t newLevel) {
         Display::showLevelUp(oldLevel, newLevel);
@@ -52,14 +56,19 @@ void Porkchop::init() {
     });
     
     // Setup main menu with callback
+    // Order: Modes -> Data/Stats -> Services
     std::vector<MenuItem> mainMenuItems = {
+        // === MODES ===
         {"OINK", 1, "Hunt for handshakes"},
         {"WARHOG", 2, "Wardrive with GPS"},
         {"PIGGY BLUES", 8, "BLE notification spam"},
         {"HOG ON SPECTRUM", 10, "WiFi spectrum analyzer"},
-        {"FILE TRANSFER", 3, "WiFi file server"},
+        // === DATA & STATS ===
+        {"SWINE STATS", 11, "Lifetime stats & buffs"},
         {"LOOT", 4, "View saved loot"},
         {"ACHIEVEMENTS", 9, "Proof of pwn"},
+        // === SERVICES ===
+        {"FILE TRANSFER", 3, "WiFi file server"},
         {"LOG VIEWER", 7, "Debug log tail"},
         {"SETTINGS", 5, "Tweak the pig"},
         {"ABOUT", 6, "Credits and info"}
@@ -80,6 +89,7 @@ void Porkchop::init() {
             case 8: setMode(PorkchopMode::PIGGYBLUES_MODE); break;
             case 9: setMode(PorkchopMode::ACHIEVEMENTS); break;
             case 10: setMode(PorkchopMode::SPECTRUM_MODE); break;
+            case 11: setMode(PorkchopMode::SWINE_STATS); break;
         }
         Menu::clearSelected();
     });
@@ -104,14 +114,15 @@ void Porkchop::setMode(PorkchopMode mode) {
     // Store the mode we're leaving for cleanup
     PorkchopMode oldMode = currentMode;
     
-    // Only save "real" modes as previous (not SETTINGS/ABOUT/MENU/CAPTURES/ACHIEVEMENTS/FILE_TRANSFER/LOG_VIEWER)
+    // Only save "real" modes as previous (not SETTINGS/ABOUT/MENU/CAPTURES/ACHIEVEMENTS/FILE_TRANSFER/LOG_VIEWER/SWINE_STATS)
     if (currentMode != PorkchopMode::SETTINGS && 
         currentMode != PorkchopMode::ABOUT && 
         currentMode != PorkchopMode::CAPTURES &&
         currentMode != PorkchopMode::ACHIEVEMENTS &&
         currentMode != PorkchopMode::MENU &&
         currentMode != PorkchopMode::FILE_TRANSFER &&
-        currentMode != PorkchopMode::LOG_VIEWER) {
+        currentMode != PorkchopMode::LOG_VIEWER &&
+        currentMode != PorkchopMode::SWINE_STATS) {
         previousMode = currentMode;
     }
     currentMode = mode;
@@ -147,6 +158,9 @@ void Porkchop::setMode(PorkchopMode mode) {
             break;
         case PorkchopMode::LOG_VIEWER:
             LogViewer::hide();
+            break;
+        case PorkchopMode::SWINE_STATS:
+            SwineStats::hide();
             break;
         default:
             break;
@@ -199,6 +213,9 @@ void Porkchop::setMode(PorkchopMode mode) {
             break;
         case PorkchopMode::LOG_VIEWER:
             LogViewer::show();
+            break;
+        case PorkchopMode::SWINE_STATS:
+            SwineStats::show();
             break;
         default:
             break;
@@ -319,8 +336,12 @@ void Porkchop::handleInput() {
                 case 'H':
                     setMode(PorkchopMode::SPECTRUM_MODE);
                     break;
-                case 's': // Settings
+                case 's': // SWINE STATS
                 case 'S':
+                    setMode(PorkchopMode::SWINE_STATS);
+                    break;
+                case 't': // Settings (Tweak)
+                case 'T':
                     setMode(PorkchopMode::SETTINGS);
                     break;
             }
@@ -405,6 +426,12 @@ void Porkchop::updateMode() {
         case PorkchopMode::LOG_VIEWER:
             LogViewer::update();
             if (!LogViewer::isActive()) {
+                setMode(PorkchopMode::MENU);
+            }
+            break;
+        case PorkchopMode::SWINE_STATS:
+            SwineStats::update();
+            if (!SwineStats::isActive()) {
                 setMode(PorkchopMode::MENU);
             }
             break;

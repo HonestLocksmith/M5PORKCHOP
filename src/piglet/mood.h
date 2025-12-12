@@ -37,6 +37,7 @@ public:
     static const String& getCurrentPhrase();
     static int getCurrentHappiness();
     static int getEffectiveHappiness();  // Happiness with momentum applied
+    static uint32_t getLastActivityTime();  // For buff/debuff idle detection
     
     // Phase 6: Public for phrase chaining helper functions
     static String currentPhrase;

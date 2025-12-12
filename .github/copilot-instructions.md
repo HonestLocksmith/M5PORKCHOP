@@ -55,6 +55,7 @@ README and user-facing docs use oldschool Phrack hacker magazine style:
 - `src/ui/captures_menu.cpp/h` - LOOT menu: captured handshakes/PMKID viewer
 - `src/ui/achievements_menu.cpp/h` - Achievements viewer with unlock descriptions
 - `src/ui/log_viewer.cpp/h` - SD card log file viewer with scrolling
+- `src/ui/swine_stats.cpp/h` - Lifetime stats overlay with buff/debuff system
 
 ### Web Interface
 - `src/web/fileserver.cpp/h` - WiFi AP file server for SD card access, black/white web UI
@@ -66,6 +67,8 @@ README and user-facing docs use oldschool Phrack hacker magazine style:
   - Default: pig faces right (toward speech bubble)
   - The `z` character represents the curly pigtail, NOT a sleep indicator
 - `src/piglet/mood.cpp/h` - Context-aware phrases, happiness tracking, mode-specific phrase arrays
+  - `Mood::getEffectiveHappiness()` - Returns -100 to +100 with momentum decay applied
+  - `Mood::getLastActivityTime()` - Returns millis() of last activity event (for idle detection)
 
 ### Avatar Animation System
 The avatar has several animation layers that modify the base frame in-place:
@@ -130,7 +133,7 @@ The avatar has several animation layers that modify the base frame in-place:
 - **`.`** - Next/Down/Increase value
 - **Enter** - Select/Toggle/Confirm
 - **Backtick (`)** - Open menu / Exit to previous mode
-- **O/W/B/H/S** - Quick mode shortcuts from IDLE (Oink/Warhog/piggyBlues/Hog on spectrum/Settings)
+- **O/W/B/H/S/T** - Quick mode shortcuts from IDLE (Oink/Warhog/piggyBlues/Hog on spectrum/Swine stats/Tweak settings)
 - **P** - Take screenshot (saves to `/screenshots/screenshotNNN.bmp` on SD card)
 - **Backspace** - Stop current mode and return to IDLE
 - **G0 button** - Physical button on top, returns to IDLE from any mode (uses GPIO0 direct read)
@@ -139,13 +142,13 @@ The avatar has several animation layers that modify the base frame in-place:
 
 ```
 PorkchopMode:
-  IDLE -> OINK_MODE | WARHOG_MODE | PIGGYBLUES_MODE | SPECTRUM_MODE | MENU | SETTINGS | CAPTURES | ACHIEVEMENTS | ABOUT | FILE_TRANSFER | LOG_VIEWER
+  IDLE -> OINK_MODE | WARHOG_MODE | PIGGYBLUES_MODE | SPECTRUM_MODE | MENU | SETTINGS | CAPTURES | ACHIEVEMENTS | ABOUT | FILE_TRANSFER | LOG_VIEWER | SWINE_STATS
   MENU -> (any mode via menu selection)
-  SETTINGS/CAPTURES/ACHIEVEMENTS/ABOUT/FILE_TRANSFER/LOG_VIEWER -> MENU (via Enter or backtick)
+  SETTINGS/CAPTURES/ACHIEVEMENTS/ABOUT/FILE_TRANSFER/LOG_VIEWER/SWINE_STATS -> MENU (via Enter or backtick)
   G0 button -> IDLE (from any mode)
 ```
 
-**Important**: `previousMode` only stores "real" modes (IDLE, OINK_MODE, WARHOG_MODE, PIGGYBLUES_MODE, SPECTRUM_MODE), never MENU/SETTINGS/ACHIEVEMENTS/ABOUT, to prevent navigation loops.
+**Important**: `previousMode` only stores "real" modes (IDLE, OINK_MODE, WARHOG_MODE, PIGGYBLUES_MODE, SPECTRUM_MODE), never MENU/SETTINGS/ACHIEVEMENTS/ABOUT/SWINE_STATS, to prevent navigation loops.
 
 ## Phrase System
 
@@ -681,6 +684,52 @@ uint16_t burstInterval = 200;       // ms between advertisement bursts (50-500)
 
 ### Overview
 Persistent experience point system with 40 rank titles (Phrack/swine themed). Data stored in NVS (Preferences library) - survives reboots and reflash. XP bar displays at y=91 in the existing 18px empty space below the grass art.
+
+### Buff/Debuff System (SWINE STATS)
+The game includes a mood-based buff/debuff system that modifies deauth packet rates, XP gain, and channel hopping speed. Buffs/debuffs are calculated from Mood happiness and session stats.
+
+**BUFFS (Positive Effects):**
+| NAME | TRIGGER | EFFECT |
+|------|---------|--------|
+| R4G3 | happiness > 70 | +50% deauth burst (5→8 pkts) |
+| SNOUT$HARP | happiness > 50 | +25% XP gain |
+| H0TSTR3AK | 2+ handshakes in session | Momentum bonus |
+| C4FF31N4T3D | happiness > 80 | -30% channel hop interval |
+
+**DEBUFFS (Negative Effects):**
+| NAME | TRIGGER | EFFECT |
+|------|---------|--------|
+| SLOP$LUG | happiness < -50 | -30% deauth burst (5→3 pkts) |
+| F0GSNOUT | happiness < -30 | -15% XP gain |
+| TR0UGHDR41N | 5min no activity | +2ms deauth jitter |
+| HAM$TR1NG | happiness < -70 | +50% channel hop interval |
+
+**Realistic Deauth Packet Rates:**
+- Base: 5 frames per burst with 1-5ms jitter
+- R4G3 Mode: 8 frames per burst (aggressive)
+- SLOP$LUG Mode: 3 frames per burst (conserving)
+- Jitter modified by TR0UGHDR41N (1-7ms when debuffed)
+
+**Access via:**
+- **S key** from IDLE mode
+- **SWINE STATS** menu item (between HOG ON SPECTRUM and FILE TRANSFER)
+
+**Display Layout:**
+```
+┌────────────────────────────────────────┐
+│ ═══ SW1N3 ST4TS ═══                    │
+│ LVL 23: KERNEL BAC0N    [████████░░]87%│
+├────────────────────────────────────────┤
+│ N3TW0RKS: 4269    H4NDSH4K3S: 127      │
+│ PMK1DS: 43        D34UTHS: 1892        │
+│ D1ST4NC3: 23.4km  BL3 BL4STS: 5420     │
+│ S3SS10NS: 89      GH0STS: 42           │
+├────────────────────────────────────────┤
+│ ACT1V3 B00STS                          │
+│ [+] R4G3 +50% deauth pwr               │
+│ [=] N0N3 ACT1V3                        │
+└────────────────────────────────────────┘
+```
 
 ### Storage
 - **Namespace**: `porkxp` (NVS)

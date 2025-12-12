@@ -76,6 +76,10 @@ int Mood::getEffectiveHappiness() {
     return constrain(happiness + momentumBoost, -100, 100);
 }
 
+uint32_t Mood::getLastActivityTime() {
+    return lastActivityTime;
+}
+
 // --- Phase 6: Phrase Chaining ---
 // Queue up to 3 phrases for sequential display
 

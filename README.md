@@ -25,6 +25,7 @@
         3.7 - Enhanced ML Mode
         3.8 - XP System
         3.9 - Achievements
+        3.10 - SWINE STATS (Buff System)
     4 - Hardware
     5 - Building & Flashing
     6 - Controls
@@ -286,6 +287,59 @@
     hunt for handshakes.
 
 
+----[ 3.10 - SWINE STATS (Buff System)
+
+    Press 'S' or hit SWINE STATS in the menu to see your lifetime
+    progress and check what buffs/debuffs are currently messing with
+    your piglet's performance.
+
+    The buff system ties mood to mechanics. Happy pig = aggressive pig.
+    Sad pig = sluggish pig. Keep the happiness meter up and you'll
+    notice the difference.
+
+    BUFFS (Positive Effects):
+
+        +---------------+-------------------+-----------------------------+
+        | NAME          | TRIGGER           | EFFECT                      |
+        +---------------+-------------------+-----------------------------+
+        | R4G3          | happiness > 70    | +50% deauth burst (5->8)    |
+        | SNOUT$HARP    | happiness > 50    | +25% XP gain                |
+        | H0TSTR3AK     | 2+ HS in session  | +10% deauth efficiency      |
+        | C4FF31N4T3D   | happiness > 80    | -30% channel hop interval   |
+        +---------------+-------------------+-----------------------------+
+
+    DEBUFFS (Negative Effects):
+
+        +---------------+-------------------+-----------------------------+
+        | NAME          | TRIGGER           | EFFECT                      |
+        +---------------+-------------------+-----------------------------+
+        | SLOP$LUG      | happiness < -50   | -30% deauth burst (5->3)    |
+        | F0GSNOUT      | happiness < -30   | -15% XP gain                |
+        | TR0UGHDR41N   | 5min no activity  | +2ms deauth jitter          |
+        | HAM$TR1NG     | happiness < -70   | +50% channel hop interval   |
+        +---------------+-------------------+-----------------------------+
+
+    Mood affects everything:
+
+        - Handshakes boost happiness big time
+        - Networks keep the pig engaged
+        - Long idle periods drain the mood
+        - Momentum system: rapid captures = stacking bonuses
+
+    The screen shows your lifetime stats in that 1337 style you love:
+
+        N3TW0RKS    = Lifetime network count
+        H4NDSH4K3S  = Total captures (4-way + PMKID)
+        PMK1DS      = Clientless captures specifically
+        D34UTHS     = Frames of chaos sent
+        D1ST4NC3    = Kilometers walked while wardriving
+        BL3 BL4STS  = BLE spam packets sent
+        S3SS10NS    = How many times you've fired this thing up
+        GH0STS      = Hidden SSID networks found
+
+    Keep the pig happy. Happy pig = effective pig.
+
+
 --[ 4 - Hardware
 
     Required:
@@ -327,7 +381,8 @@
         | W     | WARHOG - start wardriving        |
         | B     | PIGGY BLUES - BLE chaos mode     |
         | H     | HOG ON SPECTRUM - WiFi analyzer  |
-        | S     | Settings menu                    |
+        | S     | SWINE STATS - lifetime stats     |
+        | T     | Tweak settings                   |
         | P     | Screenshot - save to SD card     |
         | `     | Toggle menu / Go back            |
         | ;     | Navigate up / Scroll left        |

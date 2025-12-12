@@ -2,6 +2,7 @@
 
 #include "xp.h"
 #include "../ui/display.h"
+#include "../ui/swine_stats.h"
 #include <M5Unified.h>
 
 // Static member initialization
@@ -347,14 +348,19 @@ void XP::addXP(XPEvent event) {
 }
 
 void XP::addXP(uint16_t amount) {
+    // Apply buff/debuff XP multiplier (SNOUT$HARP +25%, F0GSNOUT -15%)
+    float mult = SwineStats::getXPMultiplier();
+    uint16_t modifiedAmount = (uint16_t)(amount * mult);
+    if (modifiedAmount < 1) modifiedAmount = 1;  // Always at least 1 XP
+    
     uint8_t oldLevel = data.cachedLevel;
     
-    data.totalXP += amount;
-    session.xp += amount;
+    data.totalXP += modifiedAmount;
+    session.xp += modifiedAmount;
 
     // Record last significant XP gain for UI (show +XP<N> under the bar)
-    if (amount > 2) {
-        lastXPGainAmount = amount;
+    if (modifiedAmount > 2) {
+        lastXPGainAmount = modifiedAmount;
         lastXPGainMs = millis();
     }
     

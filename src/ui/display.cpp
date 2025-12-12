@@ -19,6 +19,7 @@
 #include "settings_menu.h"
 #include "captures_menu.h"
 #include "achievements_menu.h"
+#include "swine_stats.h"
 
 // Static member initialization
 M5Canvas Display::topBar(&M5.Display);
@@ -123,6 +124,10 @@ void Display::update() {
             // We only need to draw top bar here (mode indicator, clock, battery)
             drawTopBar();
             return;
+            
+        case PorkchopMode::SWINE_STATS:
+            SwineStats::draw(mainCanvas);
+            break;
     }
     
     drawBottomBar();
@@ -204,6 +209,10 @@ void Display::drawTopBar() {
                 snprintf(buf, sizeof(buf), "PR00F (%d/%d)", XP::getUnlockedCount(), AchievementsMenu::TOTAL_ACHIEVEMENTS);
                 modeStr = buf;
             }
+            modeColor = COLOR_ACCENT;
+            break;
+        case PorkchopMode::SWINE_STATS:
+            modeStr = "SW1N3 ST4TS";
             modeColor = COLOR_ACCENT;
             break;
     }

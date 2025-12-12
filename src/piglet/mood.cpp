@@ -576,7 +576,7 @@ void Mood::onHandshakeCaptured(const char* apName) {
     // First phrase - the capture announcement
     if (apName && strlen(apName) > 0) {
         String ap = String(apName);
-        if (ap.length() > 10) ap = ap.substring(0, 10) + "..";
+        if (ap.length() > 14) ap = ap.substring(0, 14) + "..";
         const char* templates[] = { "%s pwned", "%s gg ez", "rekt %s", "%s is mine" };
         snprintf(buf1, sizeof(buf1), templates[random(0, 4)], ap.c_str());
     } else {
@@ -679,7 +679,7 @@ void Mood::onNewNetwork(const char* apName, int8_t rssi, uint8_t channel) {
     // Show AP name with info in funny phrases
     if (apName && strlen(apName) > 0) {
         String ap = String(apName);
-        if (ap.length() > 10) ap = ap.substring(0, 10) + "..";
+        if (ap.length() > 14) ap = ap.substring(0, 14) + "..";
         
         const char* templates[] = {
             "sniffed %s ch%d",
@@ -1013,21 +1013,40 @@ void Mood::updateAvatarState() {
 }
 
 void Mood::draw(M5Canvas& canvas) {
-    // Calculate bubble size based on message length
+    // Calculate bubble size based on ACTUAL word-wrapped line count
+    // Optimized: 16 chars/line (fits 99px text area), 5 lines max (down to grass at y=73)
     String phrase = currentPhrase;
     phrase.toUpperCase();  // UPPERCASE for visibility
-    int maxCharsPerLine = 14;  // Slightly less chars for padding
-    int numLines = 1;
-    if (phrase.length() > maxCharsPerLine) numLines = 2;
-    if (phrase.length() > maxCharsPerLine * 2) numLines = 3;
+    int maxCharsPerLine = 16;  // Fits within available width
     
-    int bubbleX = 125;  // Moved left to prevent overflow
+    // First pass: simulate word wrap to count actual lines needed
+    int numLines = 0;
+    String simRemaining = phrase;
+    while (simRemaining.length() > 0 && numLines < 5) {
+        if ((int)simRemaining.length() <= maxCharsPerLine) {
+            simRemaining = "";
+        } else {
+            int splitPos = simRemaining.lastIndexOf(' ', maxCharsPerLine);
+            if (splitPos < 1) {
+                splitPos = simRemaining.indexOf(' ', maxCharsPerLine);
+                if (splitPos < 0) {
+                    splitPos = maxCharsPerLine;
+                }
+            }
+            simRemaining = (splitPos < (int)simRemaining.length()) ? simRemaining.substring(splitPos + 1) : "";
+        }
+        numLines++;
+    }
+    if (numLines == 0) numLines = 1;  // At least 1 line
+    
+    int bubbleX = 120;  // Closer to avatar (ends ~118px)
     int bubbleY = 3;
-    int bubbleW = DISPLAY_W - bubbleX - 4;
-    int bubbleH = 14 + (numLines * 14);  // Dynamic height based on lines
+    int bubbleW = DISPLAY_W - bubbleX - 4;  // = 116px wide
+    int lineHeight = 11;
+    int bubbleH = 8 + (numLines * lineHeight);  // Padding + actual lines
     
-    // Cap bubble height to fit screen
-    if (bubbleH > MAIN_H - 10) bubbleH = MAIN_H - 10;
+    // Cap bubble height to fit above grass (y=73)
+    if (bubbleH > 70) bubbleH = 70;
     
     // Draw filled bubble with pink background
     canvas.fillRoundRect(bubbleX, bubbleY, bubbleW, bubbleH, 6, COLOR_FG);
@@ -1045,27 +1064,26 @@ void Mood::draw(M5Canvas& canvas) {
     canvas.setTextDatum(top_left);
     canvas.setTextColor(COLOR_BG);  // Black text
     
-    int textX = bubbleX + 6;
-    int textY = bubbleY + 6;
-    int lineHeight = 12;
+    int textX = bubbleX + 5;
+    int textY = bubbleY + 4;
     
-    // Word wrap logic - avoids mid-word cuts
+    // Second pass: actually render the text
     String remaining = phrase;
     int lineNum = 0;
-    while (remaining.length() > 0 && lineNum < 4) {
+    while (remaining.length() > 0 && lineNum < 5) {
         String line;
         if ((int)remaining.length() <= maxCharsPerLine) {
             line = remaining;
             remaining = "";
         } else {
-            // Try to find space before limit
+            // Try to find space before limit (but not at position 0)
             int splitPos = remaining.lastIndexOf(' ', maxCharsPerLine);
-            if (splitPos <= 0) {
-                // No space found before limit - search forward for next space
+            if (splitPos < 1) {
+                // No usable space before limit - search forward for next space
                 splitPos = remaining.indexOf(' ', maxCharsPerLine);
-                if (splitPos <= 0) {
-                    // No space at all - take entire remaining string
-                    splitPos = remaining.length();
+                if (splitPos < 0) {
+                    // No space at all - hard break at limit
+                    splitPos = maxCharsPerLine;
                 }
             }
             line = remaining.substring(0, splitPos);
@@ -1149,7 +1167,7 @@ void Mood::onDeauthing(const char* apName, uint32_t deauthCount) {
     
     // Handle null or empty SSID (hidden networks)
     String ap = (apName && strlen(apName) > 0) ? String(apName) : "ghost AP";
-    if (ap.length() > 10) ap = ap.substring(0, 10) + "..";
+    if (ap.length() > 14) ap = ap.substring(0, 14) + "..";
     
     int idx = pickPhraseIdx(PhraseCategory::DEAUTH, sizeof(PHRASES_DEAUTH) / sizeof(PHRASES_DEAUTH[0]));
     char buf[64];

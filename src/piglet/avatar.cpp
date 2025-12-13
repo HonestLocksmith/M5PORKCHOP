@@ -401,29 +401,24 @@ void Avatar::drawFrame(M5Canvas& canvas, const char** frame, uint8_t lines, bool
 }
 
 void Avatar::setGrassMoving(bool moving, bool directionRight) {
+    // Early exit if already in requested state (prevents per-frame overhead)
+    if (moving && (grassMoving || pendingGrassStart)) {
+        return;  // Already moving or pending - don't interrupt
+    }
+    if (!moving && !grassMoving && !pendingGrassStart) {
+        return;  // Already stopped
+    }
+    
     if (moving) {
         grassDirection = directionRight;
         
-        // Pig should face OPPOSITE to grass direction (treadmill effect)
-        // Grass moves right = pig faces left (on right side of screen)
-        // Grass moves left = pig faces right (on left side of screen)
-        bool targetFacing = !directionRight;
-        
-        if (facingRight != targetFacing || transitioning) {
-            // Need to transition first
+        // Just start grass immediately - no transition blocking
+        // The treadmill walk effect only triggers on MODE START, not per-frame sync
+        // If pig is already transitioning, grass will start when transition ends
+        if (transitioning) {
             pendingGrassStart = true;
             grassMoving = false;
-            
-            if (!transitioning) {
-                // Start walk transition to correct position
-                transitioning = true;
-                transitionStartTime = millis();
-                transitionFromX = currentX;
-                transitionToX = targetFacing ? 2 : 130;  // Left side if facing right, right side if facing left
-                transitionToFacingRight = targetFacing;
-            }
         } else {
-            // Already in correct position, start grass immediately
             grassMoving = true;
             pendingGrassStart = false;
         }

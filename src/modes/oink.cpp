@@ -1475,11 +1475,12 @@ bool OinkMode::saveHandshake22000(const CapturedHandshake& hs, const char* path)
         return false;
     }
     
-    // Extract MIC from M2 EAPOL frame (offset 77, 16 bytes)
-    // EAPOL-Key frame: ver(1)+type(1)+len(2)+desc(1)+keyinfo(2)+keylen(2)+replay(8)+nonce(32)+iv(16)+rsc(8)+id(8)+MIC(16)
+    // Extract MIC from M2 EAPOL frame (offset 81, 16 bytes)
+    // EAPOL-Key: ver(1)+type(1)+len(2)+desc(1)+keyinfo(2)+keylen(2)+replay(8)+nonce(32)+iv(16)+rsc(8)+reserved(8)+MIC(16)
+    // Offsets: 0-3=EAPOL hdr, 4=desc, 5-6=keyinfo, 7-8=keylen, 9-16=replay, 17-48=nonce, 49-64=iv, 65-72=rsc, 73-80=reserved, 81-96=MIC
     char micHex[33];
     for (int i = 0; i < 16; i++) {
-        sprintf(micHex + i*2, "%02x", eapolFrame->data[77 + i]);
+        sprintf(micHex + i*2, "%02x", eapolFrame->data[81 + i]);
     }
     
     // MAC_AP (6 bytes as 12 hex chars)
@@ -1523,11 +1524,11 @@ bool OinkMode::saveHandshake22000(const CapturedHandshake& hs, const char* path)
         return false;
     }
     
-    // Zero the MIC in EAPOL copy for hashcat (MIC at offset 77)
+    // Zero the MIC in EAPOL copy for hashcat (MIC at offset 81)
     // Work on a copy to avoid modifying original
     uint8_t eapolCopy[512];
     memcpy(eapolCopy, eapolFrame->data, eapolLen);
-    memset(eapolCopy + 77, 0, 16);  // Zero MIC field
+    memset(eapolCopy + 81, 0, 16);  // Zero MIC field
     
     for (int i = 0; i < eapolLen; i++) {
         sprintf(eapolHex + i*2, "%02x", eapolCopy[i]);

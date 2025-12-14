@@ -44,6 +44,7 @@ struct WiFiConfig {
     uint16_t maxNetworks = 50;
     bool enableDeauth = true;
     bool randomizeMAC = true;           // Randomize MAC on mode start for stealth
+    bool doNoHam = false;               // Passive recon mode - no attacks, fast scanning
     String otaSSID = "";
     String otaPassword = "";
     bool autoConnect = false;

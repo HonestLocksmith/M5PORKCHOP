@@ -195,7 +195,7 @@ static const char* formatDynamicPhrase(const char* templ) {
 enum class PhraseCategory : uint8_t {
     HAPPY, EXCITED, HUNTING, SLEEPY, SAD, WARHOG, WARHOG_FOUND,
     PIGGYBLUES_TARGETED, PIGGYBLUES_STATUS, PIGGYBLUES_IDLE,
-    DEAUTH, DEAUTH_SUCCESS, PMKID, SNIFFING, MENU_IDLE, RARE, DYNAMIC,
+    DEAUTH, DEAUTH_SUCCESS, PMKID, SNIFFING, PASSIVE_RECON, MENU_IDLE, RARE, DYNAMIC,
     BORED,  // No valid targets available
     COUNT  // Must be last
 };
@@ -1187,6 +1187,22 @@ const char* PHRASES_SNIFFING[] = {
     "passive recon"
 };
 
+// DO NO HAM passive recon phrases - peaceful observer mode
+const char* PHRASES_PASSIVE_RECON[] = {
+    "peaceful snoopin",
+    "no harm mode",
+    "quiet observer",
+    "ham-free scan",
+    "passive piggy",
+    "silent sweep",
+    "sniff dont bite",
+    "recon only",
+    "zen mode sniffin",
+    "watchful snout",
+    "ghost recon",
+    "stealth census"
+};
+
 // Deauth/digging phrases - 802.11 hacker rap style
 const char* PHRASES_DEAUTH[] = {
     "droppin frames on %s",
@@ -1227,6 +1243,18 @@ void Mood::onSniffing(uint16_t networkCount, uint8_t channel) {
     int idx = pickPhraseIdx(PhraseCategory::SNIFFING, sizeof(PHRASES_SNIFFING) / sizeof(PHRASES_SNIFFING[0]));
     char buf[64];
     snprintf(buf, sizeof(buf), "%s CH%d (%d APs)", PHRASES_SNIFFING[idx], channel, networkCount);
+    currentPhrase = buf;
+    lastPhraseChange = millis();
+}
+
+void Mood::onPassiveRecon(uint16_t networkCount, uint8_t channel) {
+    lastActivityTime = millis();
+    isBoredState = false;  // Clear bored state - we're observing
+    
+    // Pick passive recon phrase with channel info (no repeat)
+    int idx = pickPhraseIdx(PhraseCategory::PASSIVE_RECON, sizeof(PHRASES_PASSIVE_RECON) / sizeof(PHRASES_PASSIVE_RECON[0]));
+    char buf[64];
+    snprintf(buf, sizeof(buf), "%s CH%d (%d)", PHRASES_PASSIVE_RECON[idx], channel, networkCount);
     currentPhrase = buf;
     lastPhraseChange = millis();
 }

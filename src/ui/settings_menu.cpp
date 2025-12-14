@@ -140,6 +140,15 @@ void SettingsMenu::loadFromConfig() {
         "New MAC each mode start"
     });
     
+    // DO NO HAM - passive recon mode (no attacks)
+    items.push_back({
+        "DO NO HAM",
+        SettingType::TOGGLE,
+        Config::wifi().doNoHam ? 1 : 0,
+        0, 1, 1, "", "",
+        "Passive recon, no attacks"
+    });
+    
     // GPS enabled
     items.push_back({
         "GPS",
@@ -277,6 +286,7 @@ void SettingsMenu::saveToConfig() {
     w.lockTime = items[9].value;
     w.enableDeauth = items[10].value == 1;
     w.randomizeMAC = items[11].value == 1;
+    w.doNoHam = items[12].value == 1;
     Config::setWiFi(w);
     
     // Sound, Brightness, and Dimming
@@ -293,34 +303,34 @@ void SettingsMenu::saveToConfig() {
     
     // GPS settings
     auto& g = Config::gps();
-    g.enabled = items[12].value == 1;
-    g.powerSave = items[13].value == 1;
-    g.updateInterval = items[14].value;  // Scan interval in seconds
+    g.enabled = items[13].value == 1;
+    g.powerSave = items[14].value == 1;
+    g.updateInterval = items[15].value;  // Scan interval in seconds
     
     // Convert baud index to actual baud rate
     static const uint32_t baudRates[] = {9600, 38400, 57600, 115200};
-    g.baudRate = baudRates[items[15].value];
+    g.baudRate = baudRates[items[16].value];
     
     // GPS RX/TX pins (G1/G2 for Grove, G13/G15 for Cap LoRa868)
-    g.rxPin = items[16].value;
-    g.txPin = items[17].value;
+    g.rxPin = items[17].value;
+    g.txPin = items[18].value;
     
-    g.timezoneOffset = items[18].value;
+    g.timezoneOffset = items[19].value;
     Config::setGPS(g);
     
     // ML settings
     auto& m = Config::ml();
-    m.collectionMode = static_cast<MLCollectionMode>(items[19].value);
+    m.collectionMode = static_cast<MLCollectionMode>(items[20].value);
     Config::setML(m);
     
     // SD Logging
-    SDLog::setEnabled(items[20].value == 1);
+    SDLog::setEnabled(items[21].value == 1);
     
     // BLE settings (PIGGY BLUES)
     auto& b = Config::ble();
-    b.burstInterval = items[21].value;
-    b.advDuration = items[22].value;
-    b.rescanInterval = items[23].value;
+    b.burstInterval = items[22].value;
+    b.advDuration = items[23].value;
+    b.rescanInterval = items[24].value;
     Config::setBLE(b);
     
     // Save to file

@@ -25,6 +25,7 @@ public:
     
     // Context-aware mood updates
     static void onSniffing(uint16_t networkCount, uint8_t channel);
+    static void onPassiveRecon(uint16_t networkCount, uint8_t channel);  // DO NO HAM mode
     static void onDeauthing(const char* apName, uint32_t deauthCount);
     static void onDeauthSuccess(const uint8_t* clientMac);  // Client disconnected!
     static void onBored(uint16_t networkCount = 0);  // No valid targets available

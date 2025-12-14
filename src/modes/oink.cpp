@@ -101,6 +101,12 @@ const size_t MAX_NETWORKS = 200;       // Max tracked networks
 const size_t MAX_HANDSHAKES = 50;      // Max handshakes (each can be large)
 const size_t MAX_PMKIDS = 50;          // Max PMKIDs (smaller than handshakes)
 
+// DO NO HAM mode - hardcoded optimal values for passive recon
+// (not configurable - these are the best settings for fast walking)
+const uint16_t DNH_HOP_INTERVAL = 150;     // 150ms = fast sweeps for mobile recon
+const size_t DNH_MAX_NETWORKS = 300;       // More networks for passive collecting
+const uint32_t DNH_STALE_TIMEOUT = 120000; // 2 minutes before network considered stale
+
 // Deauth timing
 static uint32_t lastDeauthTime = 0;
 static uint32_t lastMoodUpdate = 0;
@@ -203,7 +209,8 @@ void OinkMode::init() {
 void OinkMode::start() {
     if (running) return;
     
-    Serial.println("[OINK] Starting auto-attack mode (like M5Gotchi)...");
+    bool doNoHam = Config::wifi().doNoHam;
+    Serial.printf("[OINK] Starting %s...\n", doNoHam ? "DO NO HAM (passive recon)" : "auto-attack mode (like M5Gotchi)");
     
     // Initialize WSL bypasser for deauth frame injection
     WSLBypasser::init();
@@ -211,8 +218,8 @@ void OinkMode::start() {
     // Initialize WiFi in promiscuous mode
     WiFi.mode(WIFI_STA);
     
-    // Randomize MAC if enabled (stealth)
-    if (Config::wifi().randomizeMAC) {
+    // Randomize MAC if enabled (stealth) - ALWAYS ON in DO NO HAM mode
+    if (Config::wifi().randomizeMAC || doNoHam) {
         WSLBypasser::randomizeMAC();
     }
     
@@ -336,48 +343,64 @@ void OinkMode::update() {
     // Auto-attack state machine (like M5Gotchi)
     switch (autoState) {
         case AutoState::SCANNING:
-            // Channel hopping during scan (buff-modified interval)
-            if (now - lastHopTime > SwineStats::getChannelHopInterval()) {
-                hopChannel();
-                lastHopTime = now;
-            }
-            
-            // Random hunting sniff - shows piglet is actively sniffing
-            // Check every 1 second with 8% chance = ~12 second average between sniffs
-            if (now - lastRandomSniff > 1000) {
-                lastRandomSniff = now;  // Always reset timer on check
-                if (random(0, 100) < RANDOM_SNIFF_CHANCE) {
-                    Avatar::sniff();
+            {
+                bool doNoHam = Config::wifi().doNoHam;
+                uint16_t hopInterval = doNoHam ? DNH_HOP_INTERVAL : SwineStats::getChannelHopInterval();
+                
+                // Channel hopping during scan (buff-modified interval, or fast DNH interval)
+                if (now - lastHopTime > hopInterval) {
+                    hopChannel();
+                    lastHopTime = now;
                 }
-            }
-            
-            // Update mood
-            if (now - lastMoodUpdate > 3000) {
-                Mood::onSniffing(networks.size(), currentChannel);
-                lastMoodUpdate = now;
-            }
-            
-            // After scan time, sort and pick target
-            if (now - stateStartTime > SCAN_TIME) {
-                if (!networks.empty()) {
-                    sortNetworksByPriority();
-                    autoState = AutoState::NEXT_TARGET;
-                    Serial.println("[OINK] Scan complete, starting auto-attack");
-                } else {
-                    // No networks found after scan time
-                    consecutiveFailedScans++;
-                    if (consecutiveFailedScans >= BORED_THRESHOLD) {
-                        // Pig is bored - empty spectrum
-                        autoState = AutoState::BORED;
-                        stateStartTime = now;
-                        channelHopping = false;
-                        Mood::onBored(0);
-                        Serial.println("[OINK] No networks found - pig is bored");
+                
+                // Random hunting sniff - shows piglet is actively sniffing
+                // Check every 1 second with 8% chance = ~12 second average between sniffs
+                if (now - lastRandomSniff > 1000) {
+                    lastRandomSniff = now;  // Always reset timer on check
+                    if (random(0, 100) < RANDOM_SNIFF_CHANCE) {
+                        Avatar::sniff();
+                    }
+                }
+                
+                // Update mood
+                if (now - lastMoodUpdate > 3000) {
+                    if (doNoHam) {
+                        Mood::onPassiveRecon(networks.size(), currentChannel);
                     } else {
-                        // Keep scanning
-                        stateStartTime = now;
-                        Serial.printf("[OINK] No networks, continuing scan (attempt %d/%d)\\n",
-                                     consecutiveFailedScans, BORED_THRESHOLD);
+                        Mood::onSniffing(networks.size(), currentChannel);
+                    }
+                    lastMoodUpdate = now;
+                }
+                
+                // DO NO HAM mode: Stay in SCANNING forever, never attack
+                if (doNoHam) {
+                    // Just keep scanning - no state transitions to attack
+                    // PMKID capture still works passively from M1 frames
+                    break;
+                }
+                
+                // After scan time, sort and pick target
+                if (now - stateStartTime > SCAN_TIME) {
+                    if (!networks.empty()) {
+                        sortNetworksByPriority();
+                        autoState = AutoState::NEXT_TARGET;
+                        Serial.println("[OINK] Scan complete, starting auto-attack");
+                    } else {
+                        // No networks found after scan time
+                        consecutiveFailedScans++;
+                        if (consecutiveFailedScans >= BORED_THRESHOLD) {
+                            // Pig is bored - empty spectrum
+                            autoState = AutoState::BORED;
+                            stateStartTime = now;
+                            channelHopping = false;
+                            Mood::onBored(0);
+                            Serial.println("[OINK] No networks found - pig is bored");
+                        } else {
+                            // Keep scanning
+                            stateStartTime = now;
+                            Serial.printf("[OINK] No networks, continuing scan (attempt %d/%d)\\n",
+                                         consecutiveFailedScans, BORED_THRESHOLD);
+                        }
                     }
                 }
             }
@@ -613,8 +636,9 @@ void OinkMode::update() {
     
     // Periodic network cleanup - remove stale entries
     if (now - lastScanTime > 30000) {
+        uint32_t staleTimeout = Config::wifi().doNoHam ? DNH_STALE_TIMEOUT : 60000;
         for (auto it = networks.begin(); it != networks.end();) {
-            if (now - it->lastSeen > 60000) {
+            if (now - it->lastSeen > staleTimeout) {
                 it = networks.erase(it);
             } else {
                 ++it;
@@ -931,7 +955,8 @@ void OinkMode::processBeacon(const uint8_t* payload, uint16_t len, int8_t rssi) 
         // Limit network count to prevent OOM
         // NOTE: Don't do vector erase in callback - just drop if at capacity
         // The update() loop handles cleanup of stale networks
-        if (networks.size() >= MAX_NETWORKS) {
+        size_t maxNetworks = Config::wifi().doNoHam ? DNH_MAX_NETWORKS : MAX_NETWORKS;
+        if (networks.size() >= maxNetworks) {
             // At capacity - skip adding new network (update() will clean stale ones)
             return;
         }

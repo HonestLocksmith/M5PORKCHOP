@@ -468,10 +468,12 @@ void SettingsMenu::handleInput() {
                 if (gpsChanged) {
                     GPS::reinit(Config::gps().rxPin, Config::gps().txPin, Config::gps().baudRate);
                     Display::showToast("GPS reinit");
+                    delay(500);
                 }
             }
             
             Display::showToast("Saved");
+            delay(500);  // Show toast for 500ms before exiting
             exitRequested = true;
         }
     }

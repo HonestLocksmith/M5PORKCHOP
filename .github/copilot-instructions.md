@@ -212,12 +212,22 @@ Call appropriate `Mood::onXxx()` method to trigger phrase updates.
 Settings use `SettingItem` struct with types:
 - `TOGGLE` - ON/OFF, Enter toggles, arrows navigate
 - `VALUE` - Numeric with min/max/step, arrows adjust directly
-- `ACTION` - Triggers function (e.g., Save & Exit)
 - `TEXT` - String input (Enter to edit, type characters, Enter to confirm, backtick to cancel)
+
+**Auto-save on exit**: ESC (backtick) or Backspace saves all settings and exits the menu. No explicit "Save & Exit" button needed.
+
+**GPS Hot Reinit**: When GPS pins or baud rate are changed, `GPS::reinit()` is called automatically - no reboot required. Original values are tracked on menu open to detect changes.
 
 Text input handles Shift+key for uppercase and special characters via keyboard library.
 
 Settings persist to `/porkchop.conf` via ArduinoJson.
+
+### Toast Duration
+All toasts in menus use 500ms delay after display so users can read messages. Pattern:
+```cpp
+Display::showToast("Message");
+delay(500);
+```
 
 ## WPA-SEC Integration
 

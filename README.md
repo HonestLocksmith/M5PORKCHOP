@@ -591,11 +591,17 @@
 
     Settings persist to SPIFFS. Your piglet remembers.
 
+    Navigate with ; and . keys, Enter to toggle/edit. Press ESC (backtick)
+    or Backspace to auto-save and exit. No "Save & Exit" button needed -
+    piggy's got you covered. Changes take effect immediately, including
+    GPS pin changes (hot-reinit, no reboot required).
+
         +------------+-------------------------------+---------+
         | Setting    | Description                   | Default |
         +------------+-------------------------------+---------+
         | WiFi SSID  | Network for file transfer     | -       |
         | WiFi Pass  | Password for that network     | -       |
+        | WPA-SEC Key| 32-char hex key for cracking  | -       |
         | Sound      | Beeps when things happen      | ON      |
         | Brightness | Display brightness            | 80%     |
         | Dim After  | Screen dim timeout, 0=never   | 30s     |
@@ -607,6 +613,8 @@
         | GPS        | Enable GPS module             | ON      |
         | GPS PwrSave| Sleep GPS when not hunting    | ON      |
         | Scan Intv  | WARHOG scan frequency         | 5s      |
+        | GPS RX Pin | GPIO for GPS data receive     | 1       |
+        | GPS TX Pin | GPIO for GPS data transmit    | 2       |
         | GPS Baud   | GPS module baud rate          | 115200  |
         | Timezone   | UTC offset for timestamps     | 0       |
         | ML Mode    | Basic/Enhanced beacon capture | Basic   |
@@ -615,6 +623,10 @@
         | BLE Adv    | Per-packet duration           | 100ms   |
         | BLE Rescan | Target device refresh rate    | 60s     |
         +------------+-------------------------------+---------+
+
+    GPS pin defaults work for original Cardputer + Grove GPS. If you're
+    running Cardputer-Adv with Cap LoRa868 module, change pins to:
+    RX=13, TX=15. GPS reinits automatically when pins change - no reboot.
 
 
 --[ 8 - ML Training Pipeline

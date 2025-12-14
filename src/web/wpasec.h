@@ -59,7 +59,7 @@ private:
     
     // API endpoints
     static constexpr const char* API_HOST = "wpa-sec.stanev.org";
-    static constexpr const char* RESULTS_PATH = "/?api&key=";
+    static constexpr const char* RESULTS_PATH = "/?api&dl=1";  // Download potfile
     static constexpr const char* SUBMIT_PATH = "/?submit";
     
     // Helpers

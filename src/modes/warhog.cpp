@@ -502,9 +502,17 @@ bool WarhogMode::ensureCSVFileReady() {
 bool WarhogMode::ensureMLFileReady() {
     if (currentMLFilename.length() > 0) return true;
     
+    // Ensure mldata directory exists
+    if (!SD.exists("/mldata")) {
+        if (!SD.mkdir("/mldata")) {
+            Serial.println("[WARHOG] Failed to create /mldata directory");
+            return false;
+        }
+    }
+    
     currentMLFilename = generateFilename("ml.csv");
-    // Put ML files in root, not wardriving folder
-    currentMLFilename.replace("/wardriving/warhog_", "/ml_training_");
+    // Put ML files in /mldata folder
+    currentMLFilename.replace("/wardriving/warhog_", "/mldata/ml_training_");
     
     File f = openFileWithRetry(currentMLFilename.c_str(), FILE_WRITE);
     if (!f) {

@@ -235,9 +235,9 @@ void BoarBrosMenu::draw(M5Canvas& canvas) {
             canvas.setTextColor(COLOR_FG);
         }
         
-        // SSID or "Unknown"
+        // SSID or "NONAME BRO" for hidden networks
         canvas.setCursor(4, y);
-        String displayName = bro.ssid.length() > 0 ? bro.ssid : "(unknown)";
+        String displayName = bro.ssid.length() > 0 ? bro.ssid : "NONAME BRO";
         if (displayName.length() > 12) {
             displayName = displayName.substring(0, 10) + "..";
         }

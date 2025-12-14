@@ -269,12 +269,19 @@ bool WPASec::fetchResults() {
     client.setInsecure();  // Skip certificate validation (acceptable for this use case)
     
     HTTPClient http;
-    String url = String("https://") + API_HOST + RESULTS_PATH + key;
+    String url = String("https://") + API_HOST + RESULTS_PATH;
+    Serial.printf("[WPASEC] URL: %s\n", url.c_str());
     
     http.begin(client, url);
     http.setTimeout(30000);
     
+    // Pass key as cookie (required for dl=1 endpoint)
+    String cookie = String("key=") + key;
+    http.addHeader("Cookie", cookie);
+    Serial.printf("[WPASEC] Cookie: %s\n", cookie.c_str());
+    
     int httpCode = http.GET();
+    Serial.printf("[WPASEC] HTTP response code: %d\n", httpCode);
     
     if (httpCode != 200) {
         snprintf(lastError, sizeof(lastError), "HTTP error: %d", httpCode);
@@ -287,6 +294,9 @@ bool WPASec::fetchResults() {
     // Parse response: BSSID:SSID:password lines
     String response = http.getString();
     http.end();
+    
+    Serial.printf("[WPASEC] Response length: %d bytes\n", response.length());
+    Serial.printf("[WPASEC] First 200 chars: %.200s\n", response.c_str());
     
     int newCracks = 0;
     int lineStart = 0;

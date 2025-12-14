@@ -2135,18 +2135,32 @@ void OinkMode::removeBoarBro(uint64_t bssid) {
 }
 
 bool OinkMode::excludeNetwork(int index) {
-    if (index < 0 || index >= (int)networks.size()) return false;
-    if (boarBros.size() >= MAX_BOAR_BROS) return false;
+    if (index < 0 || index >= (int)networks.size()) {
+        Serial.printf("[OINK] excludeNetwork: invalid index %d (size=%d)\n", index, (int)networks.size());
+        return false;
+    }
+    if (boarBros.size() >= MAX_BOAR_BROS) {
+        Serial.println("[OINK] excludeNetwork: max bros reached");
+        return false;
+    }
     
     uint64_t bssid = bssidToUint64(networks[index].bssid);
     
-    // Check if already excluded
-    if (boarBros.count(bssid) > 0) return false;
+    Serial.printf("[OINK] excludeNetwork: idx=%d BSSID=%012llX SSID=%s mapSize=%d\n", 
+                  index, bssid, networks[index].ssid, (int)boarBros.size());
     
-    // Store BSSID with SSID
-    boarBros[bssid] = String(networks[index].ssid);
+    // Check if already excluded
+    if (boarBros.count(bssid) > 0) {
+        Serial.printf("[OINK] excludeNetwork: ALREADY IN MAP, returning false\n");
+        return false;
+    }
+    
+    // Store BSSID with SSID (use NONAME BRO for hidden networks)
+    String ssid = String(networks[index].ssid);
+    if (ssid.length() == 0) ssid = "NONAME BRO";
+    boarBros[bssid] = ssid;
     saveBoarBros();
     
-    Serial.printf("[OINK] Added BOAR BRO: %s\n", networks[index].ssid);
+    Serial.printf("[OINK] Added BOAR BRO: %s (new mapSize=%d)\n", ssid.c_str(), (int)boarBros.size());
     return true;
 }

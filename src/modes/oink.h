@@ -4,6 +4,7 @@
 #include <Arduino.h>
 #include <esp_wifi.h>
 #include <vector>
+#include <set>
 #include <FS.h>
 #include "../ml/features.h"
 
@@ -139,6 +140,14 @@ public:
     static void moveSelectionDown();
     static void confirmSelection();
     
+    // BOAR BROS - network exclusion list
+    static bool loadBoarBros();           // Load from SD
+    static bool saveBoarBros();           // Save to SD
+    static bool excludeNetwork(int index); // Add selected network to exclusion list
+    static bool isExcluded(const uint8_t* bssid);  // Check if BSSID is excluded
+    static uint16_t getExcludedCount();   // Number of excluded networks
+    static const std::set<uint64_t>& getExcludedSet() { return boarBros; }
+    
 private:
     static bool running;
     static bool scanning;
@@ -185,4 +194,8 @@ private:
     static int getNextTarget();  // Smart target selection
     static void writePCAPHeader(fs::File& f);
     static void writePCAPPacket(fs::File& f, const uint8_t* data, uint16_t len, uint32_t ts);
+    
+    // BOAR BROS storage
+    static std::set<uint64_t> boarBros;  // Excluded BSSIDs (as uint64)
+    static uint64_t bssidToUint64(const uint8_t* bssid);  // Convert 6-byte BSSID to uint64
 };

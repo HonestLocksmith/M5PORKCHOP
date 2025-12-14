@@ -90,6 +90,11 @@ uint8_t* OinkMode::beaconFrame = nullptr;
 uint16_t OinkMode::beaconFrameLen = 0;
 bool OinkMode::beaconCaptured = false;
 
+// BOAR BROS - excluded networks
+std::set<uint64_t> OinkMode::boarBros;
+static const char* BOAR_BROS_FILE = "/boar_bros.txt";
+static const size_t MAX_BOAR_BROS = 50;  // Max excluded networks
+
 // Channel hop order (most common channels first)
 const uint8_t CHANNEL_HOP_ORDER[] = {1, 6, 11, 2, 3, 4, 5, 7, 8, 9, 10, 12, 13};
 const uint8_t CHANNEL_COUNT = sizeof(CHANNEL_HOP_ORDER);
@@ -203,7 +208,9 @@ void OinkMode::init() {
     beaconFrameLen = 0;
     beaconCaptured = false;
     
-    Serial.println("[OINK] Initialized");
+    // Load BOAR BROS exclusion list
+    loadBoarBros();
+        Serial.println("[OINK] Initialized");
 }
 
 void OinkMode::start() {
@@ -1975,6 +1982,7 @@ int OinkMode::getNextTarget() {
     // Smart target selection with retry logic
     // First pass: networks with clients, no handshake, attackAttempts < 3
     for (int i = 0; i < (int)networks.size(); i++) {
+        if (isExcluded(networks[i].bssid)) continue;  // BOAR BRO - skip
         if (networks[i].hasPMF) continue;
         if (networks[i].hasHandshake) continue;
         if (networks[i].authmode == WIFI_AUTH_OPEN) continue;  // Open = no handshake
@@ -1985,6 +1993,7 @@ int OinkMode::getNextTarget() {
     
     // Second pass: any network without handshake, attackAttempts < 2
     for (int i = 0; i < (int)networks.size(); i++) {
+        if (isExcluded(networks[i].bssid)) continue;  // BOAR BRO - skip
         if (networks[i].hasPMF) continue;
         if (networks[i].hasHandshake) continue;
         if (networks[i].authmode == WIFI_AUTH_OPEN) continue;
@@ -1995,6 +2004,7 @@ int OinkMode::getNextTarget() {
     
     // Third pass: retry networks with clients even if attempted before
     for (int i = 0; i < (int)networks.size(); i++) {
+        if (isExcluded(networks[i].bssid)) continue;  // BOAR BRO - skip
         if (networks[i].hasPMF) continue;
         if (networks[i].hasHandshake) continue;
         if (networks[i].authmode == WIFI_AUTH_OPEN) continue;
@@ -2004,4 +2014,115 @@ int OinkMode::getNextTarget() {
     }
     
     return -1;  // No suitable targets
+}
+
+// ============ BOAR BROS - Network Exclusion ============
+
+uint64_t OinkMode::bssidToUint64(const uint8_t* bssid) {
+    uint64_t result = 0;
+    for (int i = 0; i < 6; i++) {
+        result = (result << 8) | bssid[i];
+    }
+    return result;
+}
+
+bool OinkMode::isExcluded(const uint8_t* bssid) {
+    return boarBros.count(bssidToUint64(bssid)) > 0;
+}
+
+uint16_t OinkMode::getExcludedCount() {
+    return boarBros.size();
+}
+
+bool OinkMode::loadBoarBros() {
+    boarBros.clear();
+    
+    if (!SD.exists(BOAR_BROS_FILE)) {
+        Serial.println("[OINK] No BOAR BROS file, starting fresh");
+        return true;
+    }
+    
+    File f = SD.open(BOAR_BROS_FILE, FILE_READ);
+    if (!f) {
+        Serial.println("[OINK] Failed to open BOAR BROS file");
+        return false;
+    }
+    
+    while (f.available() && boarBros.size() < MAX_BOAR_BROS) {
+        String line = f.readStringUntil('\n');
+        line.trim();
+        
+        // Skip empty lines and comments
+        if (line.length() == 0 || line.startsWith("#")) continue;
+        
+        // Format: AABBCCDDEEFF  Optional SSID comment
+        // Parse first 12 hex chars as BSSID
+        if (line.length() >= 12) {
+            String hexBssid = line.substring(0, 12);
+            hexBssid.toUpperCase();
+            
+            uint64_t bssid = 0;
+            bool valid = true;
+            for (int i = 0; i < 12; i++) {
+                char c = hexBssid.charAt(i);
+                uint8_t nibble;
+                if (c >= '0' && c <= '9') nibble = c - '0';
+                else if (c >= 'A' && c <= 'F') nibble = c - 'A' + 10;
+                else { valid = false; break; }
+                bssid = (bssid << 4) | nibble;
+            }
+            
+            if (valid) {
+                boarBros.insert(bssid);
+            }
+        }
+    }
+    
+    f.close();
+    Serial.printf("[OINK] Loaded %d BOAR BROS\n", (int)boarBros.size());
+    return true;
+}
+
+bool OinkMode::saveBoarBros() {
+    File f = SD.open(BOAR_BROS_FILE, FILE_WRITE);
+    if (!f) {
+        Serial.println("[OINK] Failed to save BOAR BROS");
+        return false;
+    }
+    
+    f.println("# BOAR BROS - Networks to ignore");
+    f.println("# Format: BSSID (12 hex chars) followed by optional SSID");
+    
+    for (uint64_t bssid : boarBros) {
+        // Convert uint64 back to hex string
+        char hex[13];
+        snprintf(hex, sizeof(hex), "%02X%02X%02X%02X%02X%02X",
+                 (uint8_t)((bssid >> 40) & 0xFF),
+                 (uint8_t)((bssid >> 32) & 0xFF),
+                 (uint8_t)((bssid >> 24) & 0xFF),
+                 (uint8_t)((bssid >> 16) & 0xFF),
+                 (uint8_t)((bssid >> 8) & 0xFF),
+                 (uint8_t)(bssid & 0xFF));
+        f.println(hex);
+    }
+    
+    f.close();
+    Serial.printf("[OINK] Saved %d BOAR BROS\n", (int)boarBros.size());
+    return true;
+}
+
+bool OinkMode::excludeNetwork(int index) {
+    if (index < 0 || index >= (int)networks.size()) return false;
+    if (boarBros.size() >= MAX_BOAR_BROS) return false;
+    
+    uint64_t bssid = bssidToUint64(networks[index].bssid);
+    
+    // Check if already excluded
+    if (boarBros.count(bssid) > 0) return false;
+    
+    boarBros.insert(bssid);
+    saveBoarBros();
+    
+    Serial.printf("[OINK] Added BOAR BRO: %s\n", networks[index].ssid);
+    return true;
 }

@@ -363,11 +363,27 @@ void Porkchop::handleInput() {
         }
     }
     
-    // OINK mode - Backspace to stop and return to idle
+    // OINK mode - Backspace to stop and return to idle, E to exclude network
     if (currentMode == PorkchopMode::OINK_MODE) {
         if (M5Cardputer.Keyboard.isKeyPressed(KEY_BACKSPACE)) {
             setMode(PorkchopMode::IDLE);
             return;
+        }
+        // E key - add selected network to BOAR BROS exclusion list
+        if (M5Cardputer.Keyboard.isKeyPressed('e') || M5Cardputer.Keyboard.isKeyPressed('E')) {
+            static bool eWasPressed = false;
+            if (!eWasPressed) {
+                int idx = OinkMode::getSelectionIndex();
+                if (OinkMode::excludeNetwork(idx)) {
+                    Display::showToast("BOAR BRO added!");
+                } else {
+                    Display::showToast("Already a bro");
+                }
+            }
+            eWasPressed = true;
+        } else {
+            static bool eWasPressed = false;
+            eWasPressed = false;
         }
     }
     

@@ -5,6 +5,7 @@
 #include <esp_wifi.h>
 #include <vector>
 #include <set>
+#include <map>
 #include <FS.h>
 #include "../ml/features.h"
 
@@ -146,7 +147,7 @@ public:
     static bool isExcluded(const uint8_t* bssid);  // Check if BSSID is excluded
     static uint16_t getExcludedCount();   // Number of excluded networks
     static void removeBoarBro(uint64_t bssid);  // Remove from exclusion list
-    static const std::set<uint64_t>& getExcludedSet() { return boarBros; }
+    static const std::map<uint64_t, String>& getExcludedMap() { return boarBros; }
     
 private:
     static bool running;
@@ -196,6 +197,6 @@ private:
     static void writePCAPPacket(fs::File& f, const uint8_t* data, uint16_t len, uint32_t ts);
     
     // BOAR BROS storage
-    static std::set<uint64_t> boarBros;  // Excluded BSSIDs (as uint64)
+    static std::map<uint64_t, String> boarBros;  // Excluded BSSIDs -> SSID
     static uint64_t bssidToUint64(const uint8_t* bssid);  // Convert 6-byte BSSID to uint64
 };

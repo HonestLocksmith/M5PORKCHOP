@@ -91,7 +91,7 @@ uint16_t OinkMode::beaconFrameLen = 0;
 bool OinkMode::beaconCaptured = false;
 
 // BOAR BROS - excluded networks
-std::set<uint64_t> OinkMode::boarBros;
+std::map<uint64_t, String> OinkMode::boarBros;
 static const char* BOAR_BROS_FILE = "/boar_bros.txt";
 static const size_t MAX_BOAR_BROS = 50;  // Max excluded networks
 
@@ -2071,7 +2071,13 @@ bool OinkMode::loadBoarBros() {
             }
             
             if (valid) {
-                boarBros.insert(bssid);
+                // Extract SSID from rest of line (after space)
+                String ssid = "";
+                if (line.length() > 13) {
+                    ssid = line.substring(13);
+                    ssid.trim();
+                }
+                boarBros[bssid] = ssid;
             }
         }
     }
@@ -2091,7 +2097,10 @@ bool OinkMode::saveBoarBros() {
     f.println("# BOAR BROS - Networks to ignore");
     f.println("# Format: BSSID (12 hex chars) followed by optional SSID");
     
-    for (uint64_t bssid : boarBros) {
+    for (const auto& entry : boarBros) {
+        uint64_t bssid = entry.first;
+        const String& ssid = entry.second;
+        
         // Convert uint64 back to hex string
         char hex[13];
         snprintf(hex, sizeof(hex), "%02X%02X%02X%02X%02X%02X",
@@ -2101,15 +2110,6 @@ bool OinkMode::saveBoarBros() {
                  (uint8_t)((bssid >> 16) & 0xFF),
                  (uint8_t)((bssid >> 8) & 0xFF),
                  (uint8_t)(bssid & 0xFF));
-        
-        // Try to find SSID from current networks
-        String ssid = "";
-        for (const auto& net : networks) {
-            if (bssidToUint64(net.bssid) == bssid) {
-                ssid = String(net.ssid);
-                break;
-            }
-        }
         
         if (ssid.length() > 0) {
             f.printf("%s %s\n", hex, ssid.c_str());
@@ -2138,7 +2138,8 @@ bool OinkMode::excludeNetwork(int index) {
     // Check if already excluded
     if (boarBros.count(bssid) > 0) return false;
     
-    boarBros.insert(bssid);
+    // Store BSSID with SSID
+    boarBros[bssid] = String(networks[index].ssid);
     saveBoarBros();
     
     Serial.printf("[OINK] Added BOAR BRO: %s\n", networks[index].ssid);

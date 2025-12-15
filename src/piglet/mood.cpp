@@ -651,8 +651,13 @@ void Mood::onPMKIDCaptured(const char* apName) {
     // Sniff animation - stealthy capture!
     Avatar::sniff();
     
-    // Award XP for PMKID capture (75 XP - more than handshake)
-    XP::addXP(XPEvent::PMKID_CAPTURED);
+    // Award XP for PMKID capture
+    // If in DO NO HAM mode, award the rare ghost PMKID XP (100 XP!)
+    if (Config::wifi().doNoHam) {
+        XP::addXP(XPEvent::DNH_PMKID_GHOST);  // Rare passive PMKID!
+    } else {
+        XP::addXP(XPEvent::PMKID_CAPTURED);   // Regular 75 XP
+    }
     
     // Bonus XP for low battery clutch capture
     if (M5.Power.getBatteryLevel() < 10) {
@@ -706,10 +711,17 @@ void Mood::onNewNetwork(const char* apName, int8_t rssi, uint8_t channel) {
     Avatar::sniff();
     
     // Award XP for network discovery
+    // Check if in DO NO HAM passive mode for different XP event
+    bool isPassive = Config::wifi().doNoHam;
+    
     if (apName && strlen(apName) > 0) {
-        XP::addXP(XPEvent::NETWORK_FOUND);
+        if (isPassive) {
+            XP::addXP(XPEvent::DNH_NETWORK_PASSIVE);  // Passive mode bonus
+        } else {
+            XP::addXP(XPEvent::NETWORK_FOUND);
+        }
     } else {
-        // Hidden network gets bonus XP
+        // Hidden network gets bonus XP (same in both modes)
         XP::addXP(XPEvent::NETWORK_HIDDEN);
     }
     

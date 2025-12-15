@@ -36,7 +36,12 @@ static const uint16_t XP_VALUES[] = {
     10,     // SESSION_30MIN (was 50, doc says 10)
     25,     // SESSION_60MIN (was 100, doc says 25)
     50,     // SESSION_120MIN (was 200, doc says 50)
-    20      // LOW_BATTERY_CAPTURE
+    20,     // LOW_BATTERY_CAPTURE
+    // DO NO HAM / BOAR BROS events (v0.1.4+)
+    2,      // DNH_NETWORK_PASSIVE - same as regular network
+    100,    // DNH_PMKID_GHOST - rare passive PMKID!
+    5,      // BOAR_BRO_ADDED
+    15      // BOAR_BRO_MERCY - mid-attack exclusion
 };
 
 // 8 class names (every 5 levels)
@@ -49,6 +54,14 @@ static const char* CLASS_NAMES[] = {
     "EXPL01T",   // L26-30
     "WARL0RD",   // L31-35
     "L3G3ND"     // L36-40
+};
+
+// Title override names (unlockable special titles)
+static const char* TITLE_OVERRIDE_NAMES[] = {
+    nullptr,          // NONE - use standard level title
+    "SH4D0W_H4M",     // Unlocked by ACH_SHADOW_BROKER
+    "P4C1F1ST_P0RK",  // Unlocked by ACH_WITNESS_PROTECT
+    "Z3N_M4ST3R"      // Unlocked by ACH_ZEN_MASTER
 };
 
 // 40 rank titles - hacker/grindhouse/tarantino + pig flavor
@@ -153,7 +166,23 @@ static const char* ACHIEVEMENT_NAMES[] = {
     "R0GUE SP0TTER",
     "H1DDEN MASTER",
     "WPA3 HUNT3R",
-    "MAX L3VEL"
+    "MAX L3VEL",
+    "AB0UT JUNK13",
+    // DO NO HAM achievements (bits 48-52)
+    "G01NG D4RK",         // 5 min passive this session
+    "GH0ST PR0T0C0L",     // 30 min passive + 50 nets
+    "SH4D0W BR0K3R",      // 500 passive networks lifetime
+    "S1L3NT 4SS4SS1N",    // First passive PMKID
+    "Z3N M4ST3R",         // 5 passive PMKIDs (title unlock)
+    // BOAR BROS achievements (bits 53-57)
+    "F1RST BR0",          // First network excluded
+    "F1V3 F4M1L13S",      // 5 bros added
+    "M3RCY M0D3",         // First mercy kill
+    "W1TN3SS PR0T3CT",    // 25 bros (title unlock)
+    "FULL R0ST3R",        // 100 bros (max)
+    // Combined achievements (bits 58-59)
+    "1NN3R P34C3",        // 1hr passive + 10 bros + 0 deauths
+    "P4C1F1ST RUN"        // 50+ nets all as bros
 };
 static const uint8_t ACHIEVEMENT_COUNT = sizeof(ACHIEVEMENT_NAMES) / sizeof(ACHIEVEMENT_NAMES[0]);
 
@@ -206,6 +235,13 @@ void XP::load() {
     data.windowsBLE = prefs.getUInt("windows", 0);
     data.sessions = prefs.getUShort("sessions", 0);
     data.wepFound = prefs.getBool("wep", false);
+    // DO NO HAM / BOAR BROS persistent counters (v0.1.4+)
+    data.passiveNetworks = prefs.getUInt("passnet", 0);
+    data.passivePMKIDs = prefs.getUInt("passpmk", 0);
+    data.passiveTimeS = prefs.getUInt("passtime", 0);
+    data.boarBrosAdded = prefs.getUInt("brosadd", 0);
+    data.mercyCount = prefs.getUInt("mercy", 0);
+    data.titleOverride = static_cast<TitleOverride>(prefs.getUChar("titleo", 0));
     data.cachedLevel = calculateLevel(data.totalXP);
     
     prefs.end();
@@ -233,6 +269,13 @@ void XP::save() {
     prefs.putUInt("windows", data.windowsBLE);
     prefs.putUShort("sessions", data.sessions);
     prefs.putBool("wep", data.wepFound);
+    // DO NO HAM / BOAR BROS persistent counters (v0.1.4+)
+    prefs.putUInt("passnet", data.passiveNetworks);
+    prefs.putUInt("passpmk", data.passivePMKIDs);
+    prefs.putUInt("passtime", data.passiveTimeS);
+    prefs.putUInt("brosadd", data.boarBrosAdded);
+    prefs.putUInt("mercy", data.mercyCount);
+    prefs.putUChar("titleo", static_cast<uint8_t>(data.titleOverride));
     
     prefs.end();
     
@@ -352,6 +395,46 @@ void XP::addXP(XPEvent event) {
                 session.rogueSpotterAwarded = true;
             }
             break;
+        // DO NO HAM / BOAR BROS events (v0.1.4+)
+        case XPEvent::DNH_NETWORK_PASSIVE:
+            // Network found in DO NO HAM passive mode
+            data.passiveNetworks++;
+            session.passiveNetworks++;
+            data.lifetimeNetworks++;
+            session.networks++;
+            if (session.firstNetworkTime == 0) session.firstNetworkTime = millis();
+            break;
+        case XPEvent::DNH_PMKID_GHOST:
+            // Rare: PMKID captured in passive mode (no deauth)
+            data.passivePMKIDs++;
+            session.passivePMKIDs++;
+            data.lifetimePMKID++;
+            session.handshakes++;
+            // First passive PMKID achievement
+            if (!hasAchievement(ACH_SILENT_ASSASSIN)) {
+                unlockAchievement(ACH_SILENT_ASSASSIN);
+            }
+            break;
+        case XPEvent::BOAR_BRO_ADDED:
+            // Network added to BOAR BROS exclusion list
+            data.boarBrosAdded++;
+            session.boarBrosThisSession++;
+            // First bro achievement
+            if (!hasAchievement(ACH_FIRST_BRO)) {
+                unlockAchievement(ACH_FIRST_BRO);
+            }
+            break;
+        case XPEvent::BOAR_BRO_MERCY:
+            // Network excluded during active attack (mid-battle mercy)
+            data.boarBrosAdded++;
+            session.boarBrosThisSession++;
+            data.mercyCount++;
+            session.mercyCount++;
+            // First mercy achievement
+            if (!hasAchievement(ACH_MERCY_MODE)) {
+                unlockAchievement(ACH_MERCY_MODE);
+            }
+            break;
         default:
             break;
     }
@@ -436,6 +519,25 @@ void XP::updateSessionTime() {
     if (sessionMinutes >= 120 && !session.session120Awarded) {
         addXP(XPEvent::SESSION_120MIN);
         session.session120Awarded = true;
+    }
+    
+    // Track passive time for Going Dark achievement (5 min passive this session)
+    // and Ghost Protocol (30 min passive + 50 nets)
+    if (session.passiveTimeStart > 0 && !session.everDeauthed) {
+        uint32_t passiveMs = millis() - session.passiveTimeStart;
+        uint32_t passiveMinutes = passiveMs / 60000;
+        
+        // 5 minutes passive = Going Dark
+        if (passiveMinutes >= 5 && !hasAchievement(ACH_GOING_DARK)) {
+            unlockAchievement(ACH_GOING_DARK);
+        }
+        
+        // 30 minutes passive + 50 networks = Ghost Protocol
+        if (passiveMinutes >= 30 && session.passiveNetworks >= 50 && !hasAchievement(ACH_GHOST_PROTOCOL)) {
+            unlockAchievement(ACH_GHOST_PROTOCOL);
+            // Also add to lifetime passive time
+            data.passiveTimeS += passiveMinutes * 60;
+        }
     }
 }
 
@@ -544,6 +646,67 @@ const char* XP::getTitleForLevel(uint8_t level) {
     if (level < 1) level = 1;
     if (level > MAX_LEVEL) level = MAX_LEVEL;
     return RANK_TITLES[level - 1];
+}
+
+// === TITLE OVERRIDE SYSTEM (v0.1.4+) ===
+
+const char* XP::getDisplayTitle() {
+    // If override is set and valid, use it
+    if (data.titleOverride != TitleOverride::NONE && canUseTitleOverride(data.titleOverride)) {
+        return getTitleOverrideName(data.titleOverride);
+    }
+    // Fall back to standard level-based title
+    return getTitle();
+}
+
+TitleOverride XP::getTitleOverride() {
+    return data.titleOverride;
+}
+
+void XP::setTitleOverride(TitleOverride override) {
+    // Validate the override is unlocked before setting
+    if (override == TitleOverride::NONE || canUseTitleOverride(override)) {
+        data.titleOverride = override;
+        save();  // Persist immediately
+    }
+}
+
+const char* XP::getTitleOverrideName(TitleOverride override) {
+    uint8_t idx = static_cast<uint8_t>(override);
+    if (idx > 3) return nullptr;
+    return TITLE_OVERRIDE_NAMES[idx];
+}
+
+bool XP::canUseTitleOverride(TitleOverride override) {
+    switch (override) {
+        case TitleOverride::NONE:
+            return true;  // Always can use "no override"
+        case TitleOverride::SH4D0W_H4M:
+            return hasAchievement(ACH_SHADOW_BROKER);  // 500 passive networks
+        case TitleOverride::P4C1F1ST_P0RK:
+            return hasAchievement(ACH_WITNESS_PROTECT);  // 25 BOAR BROS
+        case TitleOverride::Z3N_M4ST3R:
+            return hasAchievement(ACH_ZEN_MASTER);  // 5 passive PMKIDs
+        default:
+            return false;
+    }
+}
+
+TitleOverride XP::getNextAvailableOverride() {
+    // Cycle through available overrides
+    uint8_t current = static_cast<uint8_t>(data.titleOverride);
+    
+    // Try each override in order, wrapping around
+    for (uint8_t i = 1; i <= 4; i++) {
+        uint8_t next = (current + i) % 4;  // 0=NONE, 1-3=overrides
+        TitleOverride candidate = static_cast<TitleOverride>(next);
+        if (canUseTitleOverride(candidate)) {
+            return candidate;
+        }
+    }
+    
+    // Fallback to current
+    return data.titleOverride;
 }
 
 PorkClass XP::getClass() {
@@ -885,6 +1048,60 @@ void XP::checkAchievements() {
     // Max level reached
     if (data.cachedLevel >= 40 && !hasAchievement(ACH_MAX_LEVEL)) {
         unlockAchievement(ACH_MAX_LEVEL);
+    }
+    
+    // ===== DO NO HAM ACHIEVEMENTS (v0.1.4+) =====
+    
+    // Going Dark (5 min passive) and Ghost Protocol (30 min + 50 nets) 
+    // are checked in updateSessionTime() since they're session-based
+    
+    // 500 passive networks (unlocks SH4D0W_H4M title)
+    if (data.passiveNetworks >= 500 && !hasAchievement(ACH_SHADOW_BROKER)) {
+        unlockAchievement(ACH_SHADOW_BROKER);
+    }
+    
+    // 5 passive PMKIDs (unlocks Z3N_M4ST3R title)
+    if (data.passivePMKIDs >= 5 && !hasAchievement(ACH_ZEN_MASTER)) {
+        unlockAchievement(ACH_ZEN_MASTER);
+    }
+    
+    // Silent Assassin (first passive PMKID) is checked in addXP(DNH_PMKID_GHOST)
+    
+    // ===== BOAR BROS ACHIEVEMENTS (v0.1.4+) =====
+    
+    // 5 networks in BOAR BROS (Five Families)
+    if (data.boarBrosAdded >= 5 && !hasAchievement(ACH_FIVE_FAMILIES)) {
+        unlockAchievement(ACH_FIVE_FAMILIES);
+    }
+    
+    // 25 networks in BOAR BROS (unlocks P4C1F1ST_P0RK title)
+    if (data.boarBrosAdded >= 25 && !hasAchievement(ACH_WITNESS_PROTECT)) {
+        unlockAchievement(ACH_WITNESS_PROTECT);
+    }
+    
+    // 100 bros = Full Roster (max limit)
+    // Note: Check OinkMode::boarBros.size() when available
+    if (data.boarBrosAdded >= 100 && !hasAchievement(ACH_FULL_ROSTER)) {
+        unlockAchievement(ACH_FULL_ROSTER);
+    }
+    
+    // ===== COMBINED ACHIEVEMENTS (v0.1.4+) =====
+    
+    // Inner Peace: 1hr passive + 10 bros + 0 deauths this session
+    // Check session-based conditions (must add 10 bros THIS session)
+    if (!hasAchievement(ACH_INNER_PEACE) && !session.everDeauthed) {
+        uint32_t sessionMinutes = (millis() - session.startTime) / 60000;
+        if (sessionMinutes >= 60 && session.boarBrosThisSession >= 10) {
+            unlockAchievement(ACH_INNER_PEACE);
+        }
+    }
+    
+    // Pacifist Run: 50+ networks discovered, all added to bros
+    // This is session-based: networks == boarBrosThisSession this session
+    if (!hasAchievement(ACH_PACIFIST_RUN)) {
+        if (session.networks >= 50 && session.networks <= session.boarBrosThisSession) {
+            unlockAchievement(ACH_PACIFIST_RUN);
+        }
     }
 }
 

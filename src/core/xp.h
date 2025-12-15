@@ -16,6 +16,14 @@ enum class PorkClass : uint8_t {
     L3G3ND   = 7    // L36-40 - Legendary hackers
 };
 
+// Title overrides - special playstyle-based titles
+enum class TitleOverride : uint8_t {
+    NONE          = 0,   // Use standard level-based rank
+    SH4D0W_H4M    = 1,   // Unlocked by ACH_SHADOW_BROKER (500 passive nets)
+    P4C1F1ST_P0RK = 2,   // Unlocked by ACH_WITNESS_PROTECT (25 bros)
+    Z3N_M4ST3R    = 3    // Unlocked by ACH_ZEN_MASTER
+};
+
 // XP event types for tracking
 enum class XPEvent : uint8_t {
     NETWORK_FOUND,          // +1 XP
@@ -39,7 +47,12 @@ enum class XPEvent : uint8_t {
     SESSION_30MIN,          // +50 XP
     SESSION_60MIN,          // +100 XP
     SESSION_120MIN,         // +200 XP
-    LOW_BATTERY_CAPTURE     // +20 XP bonus
+    LOW_BATTERY_CAPTURE,    // +20 XP bonus
+    // DO NO HAM / BOAR BROS events (v0.1.4+)
+    DNH_NETWORK_PASSIVE,    // +2 XP - network found in passive mode
+    DNH_PMKID_GHOST,        // +100 XP - PMKID captured passively (rare!)
+    BOAR_BRO_ADDED,         // +5 XP - added network to BOAR BROS
+    BOAR_BRO_MERCY          // +15 XP - excluded mid-attack target
 };
 
 // Achievement bitflags (uint64_t for 47 achievements)
@@ -109,12 +122,30 @@ enum PorkAchievement : uint64_t {
     ACH_WPA3_HUNTER     = 1ULL << 45,  // 25 WPA3 networks
     ACH_MAX_LEVEL       = 1ULL << 46,  // Reach level 40
     ACH_ABOUT_JUNKIE    = 1ULL << 47,  // Press Enter 5x in About screen
+    
+    // DO NO HAM achievements (bits 48-52) - pacifist/stealth playstyle
+    ACH_GOING_DARK      = 1ULL << 48,  // 5 minutes in passive mode this session
+    ACH_GHOST_PROTOCOL  = 1ULL << 49,  // 30 min passive + 50 networks in session
+    ACH_SHADOW_BROKER   = 1ULL << 50,  // 500 passive networks lifetime (unlocks SH4D0W_H4M)
+    ACH_SILENT_ASSASSIN = 1ULL << 51,  // First PMKID captured in passive mode
+    ACH_ZEN_MASTER      = 1ULL << 52,  // 5 passive PMKIDs (unlocks Z3N_M4ST3R title)
+    
+    // BOAR BROS achievements (bits 53-57) - network protection playstyle
+    ACH_FIRST_BRO       = 1ULL << 53,  // First network added to BOAR BROS
+    ACH_FIVE_FAMILIES   = 1ULL << 54,  // 5 bros added lifetime
+    ACH_MERCY_MODE      = 1ULL << 55,  // First mid-attack exclusion
+    ACH_WITNESS_PROTECT = 1ULL << 56,  // 25 bros added lifetime (unlocks P4C1F1ST_P0RK)
+    ACH_FULL_ROSTER     = 1ULL << 57,  // Currently have 100 bros (max limit)
+    
+    // Combined DO NO HAM + BOAR BROS achievements (bits 58-59)
+    ACH_INNER_PEACE     = 1ULL << 58,  // 1hr passive + 10 bros + 0 deauths this session
+    ACH_PACIFIST_RUN    = 1ULL << 59,  // 50+ networks discovered, all added to bros
 };
 
 // Persistent XP data structure (stored in NVS)
 struct PorkXPData {
     uint32_t totalXP;           // Lifetime XP
-    uint64_t achievements;      // Achievement bitfield (expanded for 47 achievements)
+    uint64_t achievements;      // Achievement bitfield (expanded for 60 achievements)
     uint32_t lifetimeNetworks;  // Counter
     uint32_t lifetimeHS;        // Counter
     uint32_t lifetimePMKID;     // PMKID counter
@@ -131,6 +162,13 @@ struct PorkXPData {
     uint16_t sessions;          // Session count
     uint8_t  cachedLevel;       // Cached level for quick access
     bool     wepFound;          // WEP network ever found (new)
+    // DO NO HAM / BOAR BROS persistent counters (v0.1.4+)
+    uint32_t passiveNetworks;   // Networks found in DNH mode
+    uint32_t passivePMKIDs;     // PMKIDs captured in DNH mode
+    uint32_t passiveTimeS;      // Seconds in pure passive mode (no deauth ever)
+    uint32_t boarBrosAdded;     // Total networks added to BOAR BROS
+    uint32_t mercyCount;        // Mid-attack exclusions (mercy kills)
+    TitleOverride titleOverride; // Player-selected title override
 };
 
 // Session-only stats (not persisted)
@@ -152,6 +190,13 @@ struct SessionStats {
     bool earlyBirdAwarded;      // 5-7am session (new)
     bool weekendWarriorAwarded; // Weekend session (new)
     bool rogueSpotterAwarded;   // ML rogue detected (new)
+    // DO NO HAM / BOAR BROS session counters (v0.1.4+)
+    uint32_t passiveNetworks;   // Networks in DNH mode this session
+    uint32_t passivePMKIDs;     // PMKIDs in DNH mode this session
+    uint32_t passiveTimeStart;  // millis() when DNH enabled (0 = not in DNH)
+    uint32_t boarBrosThisSession; // Bros added this session (for PACIFIST_RUN)
+    uint32_t mercyCount;        // Mid-attack exclusions this session
+    bool everDeauthed;          // Has player ever sent deauth? (for Silent Witness)
 };
 
 class XP {
@@ -171,6 +216,14 @@ public:
     static uint8_t getProgress();  // 0-100%
     static const char* getTitle();
     static const char* getTitleForLevel(uint8_t level);
+    
+    // Title override system (v0.1.4+)
+    static const char* getDisplayTitle();  // Returns override title if set, else level title
+    static TitleOverride getTitleOverride();
+    static void setTitleOverride(TitleOverride override);
+    static const char* getTitleOverrideName(TitleOverride override);
+    static bool canUseTitleOverride(TitleOverride override);  // Check if player has unlocked it
+    static TitleOverride getNextAvailableOverride();  // Cycle through unlocked overrides
     
     // Class info
     static PorkClass getClass();

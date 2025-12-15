@@ -1230,7 +1230,24 @@ BLE_BURST          = 2     // BLE spam burst sent
 SESSION_30MIN      = 10    // 30 minutes active
 SESSION_1HR        = 25    // 1 hour active
 SESSION_2HR        = 50    // 2 hours active (dedication)
+// DO NO HAM / BOAR BROS events (v0.1.4+)
+DNH_NETWORK_PASSIVE = 2    // Network found in passive mode
+DNH_PMKID_GHOST    = 100   // PMKID captured passively (rare!)
+BOAR_BRO_ADDED     = 5     // Network added to BOAR BROS
+BOAR_BRO_MERCY     = 15    // Excluded mid-attack target
 ```
+
+### Title Override System (v0.1.4+)
+Special playstyle-based titles that replace the standard level-based rank:
+```
+NONE          = Use standard level title (default)
+SH4D0W_H4M    = Unlocked by ACH_SHADOW_BROKER (500 passive networks)
+P4C1F1ST_P0RK = Unlocked by ACH_WITNESS_PROTECT (25 BOAR BROS)
+Z3N_M4ST3R    = Unlocked by ACH_ZEN_MASTER (5 passive PMKIDs)
+```
+- Cycle through unlocked titles with Enter key in SWINE STATS menu
+- Active override shown with `*` suffix: `LVL 23: SH4D0W_H4M*`
+- XP::getDisplayTitle() returns override or standard title
 
 ### Rank Titles (40 Levels)
 Exponential XP curve - quick early levels, months at high levels:
@@ -1257,8 +1274,8 @@ L19: TRUFFLE R00T        L39: PHIBER 0PT1K
 L20: INJECT P1G          L40: MUDGE UNCHA1NED
 ```
 
-### Achievements (47 Bitflags)
-47 secret badges stored in `data.achievements` uint64_t bitfield. Viewable via Achievements menu.
+### Achievements (60 Bitflags)
+60 secret badges stored in `data.achievements` uint64_t bitfield. Viewable via Achievements menu.
 
 ```cpp
 // Original achievements (bits 0-16)
@@ -1318,17 +1335,36 @@ ACH_FOUR_HOUR_GRIND = 1ULL << 40  // 4 hour session
 ACH_EARLY_BIRD      = 1ULL << 41  // Active 5-7am
 ACH_WEEKEND_WARRIOR = 1ULL << 42  // Session on weekend
 
-// Special/rare (bits 43-46)
+// Special/rare (bits 43-47)
 ACH_ROGUE_SPOTTER   = 1ULL << 43  // ML detects rogue AP
 ACH_HIDDEN_MASTER   = 1ULL << 44  // 50 hidden networks
 ACH_WPA3_HUNTER     = 1ULL << 45  // 25 WPA3 networks
 ACH_MAX_LEVEL       = 1ULL << 46  // Reach level 40
+ACH_ABOUT_JUNKIE    = 1ULL << 47  // Press Enter 5x in About screen
+
+// DO NO HAM achievements (bits 48-52) - pacifist/stealth playstyle
+ACH_GOING_DARK      = 1ULL << 48  // 5 minutes in passive mode this session
+ACH_GHOST_PROTOCOL  = 1ULL << 49  // 30 min passive + 50 networks in session
+ACH_SHADOW_BROKER   = 1ULL << 50  // 500 passive networks (unlocks SH4D0W_H4M title)
+ACH_SILENT_ASSASSIN = 1ULL << 51  // First PMKID captured in passive mode
+ACH_ZEN_MASTER      = 1ULL << 52  // 5 passive PMKIDs (unlocks Z3N_M4ST3R title)
+
+// BOAR BROS achievements (bits 53-57) - network protection playstyle
+ACH_FIRST_BRO       = 1ULL << 53  // First network added to BOAR BROS
+ACH_FIVE_FAMILIES   = 1ULL << 54  // 5 bros added lifetime
+ACH_MERCY_MODE      = 1ULL << 55  // First mid-attack exclusion
+ACH_WITNESS_PROTECT = 1ULL << 56  // 25 bros added (unlocks P4C1F1ST_P0RK title)
+ACH_FULL_ROSTER     = 1ULL << 57  // 100 bros (max limit)
+
+// Combined DO NO HAM + BOAR BROS achievements (bits 58-59)
+ACH_INNER_PEACE     = 1ULL << 58  // 1hr passive + 10 bros + 0 deauths this session
+ACH_PACIFIST_RUN    = 1ULL << 59  // 50+ networks discovered, all added to bros
 ```
 
 ### Achievements Menu
 `src/ui/achievements_menu.cpp/h` - Accessible from main menu ("ACHIEVEMENTS").
 
-- Shows all 47 achievements with `[X]` unlocked / `[ ]` locked
+- Shows all 60 achievements with `[X]` unlocked / `[ ]` locked
 - Locked achievements show `???` for name (no spoilers)
 - Bottom bar shows unlock description for selected achievement, or "UNKNOWN" if locked
 - Enter key shows toast-style detail popup (pink bg, black text)

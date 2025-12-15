@@ -11,38 +11,27 @@
                                   ░                                  
 ```
 
---[ Quick Start - Get the pig running
+--[ Quick Start - The Only Way That Matters
 
-    Releases: https://github.com/neledov/M5PORKCHOP/releases
-
-    FIRST TIME INSTALL (M5 Burner):
+    M5 Launcher + firmware.bin from GitHub releases.
     
-        1. Download porkchop_vX.X.X.bin from releases
-        2. Open M5 Burner, select your COM port
-        3. Click "Burn" and select the .bin file
-        4. Burn at 0x0 offset (default)
-        5. Wait for completion, reboot, oink
-
-    M5 BURNER GOTCHAS:
+    That's it. No M5 Burner. No merged binaries. No esptool wizardry.
     
-        * "Burn" button, not "Download" - Download is for fetching
-          from M5's catalog, not for local files
-        * If Burn greyed out: close/reopen M5 Burner, reconnect USB
-        * COM port not showing? Install CP210x drivers from Silicon Labs
-
-    ALTERNATIVE - ESP Web Tool (no install):
+        1. Already got M5 Launcher? Good. Skip to step 3.
+        2. No Launcher? Flash it once via M5 Burner. One time. Never again.
+        3. Grab firmware.bin: github.com/neledov/M5PORKCHOP/releases
+        4. Drop on SD card. Launcher -> SD -> install.
+        5. Oink.
     
-        1. Go to https://espressif.github.io/esptool-js/
-        2. Connect Cardputer via USB
-        3. Click Connect, select COM port
-        4. Add file: porkchop_vX.X.X.bin at offset 0x0
-        5. Click Program, wait, done
-
-    UPGRADING (preserve your XP):
+    Updates? Same thing. Download new firmware.bin, SD card, install.
+    XP preserved forever. Your MUDGE UNCHA1NED grind stays intact.
     
-        Use firmware.bin (not the merged one) at offset 0x10000.
-        M5 Burner merged .bin nukes NVS at 0x9000 = your grind is gone.
-        See section 5.1 for the full explanation.
+    M5 Burner OTA? Don't. Wrong binary format. Bootloop city.
+                   (recoverable via USB reflash, but why bother)
+    M5 Burner USB? Works for fresh install but nukes NVS on updates.
+                   Say goodbye to your level 38.
+    
+    The pig remembers those who respect the partition table.
 
 
 --[ Contents
@@ -704,6 +693,7 @@
         +---------------------------+-------------+----------------+
         | Method                    | XP/Level    | Settings       |
         +---------------------------+-------------+----------------+
+        | M5 Launcher (SD card)     | PRESERVED   | PRESERVED      |
         | pio run -t upload         | PRESERVED   | PRESERVED      |
         | ESP Web Tool (firmware)   | PRESERVED   | PRESERVED      |
         | M5 Burner (merged bin)    | NUKED       | PRESERVED      |
@@ -714,44 +704,45 @@
     they live in SPIFFS at 0x610000 - way beyond the blast radius.
 
 
-------[ 5.1.1 - First Time Install (any method works)
+------[ 5.1.1 - The Right Way (M5 Launcher)
 
-    Fresh device? Pick your poison:
+    This is the recommended method for both install and upgrades:
 
-        M5 Burner:
-            - Grab porkchop_v0.x.x.bin from GitHub releases
-            - Flash at offset 0x0, done
+        1. Get M5 Launcher on your device (one-time M5 Burner flash)
+        2. Download firmware.bin from GitHub releases
+        3. Copy to SD card, any directory
+        4. Launcher -> SD -> navigate -> install
+        5. XP preserved. Forever. Even on first install.
 
-        ESP Web Tool (browser, no install):
-            - Go to https://espressif.github.io/esptool-js/
-            - Connect your Cardputer
-            - Add porkchop_v0.x.x.bin at offset 0x0
-            - Flash, profit
+    Updates? Same exact process. No XP loss. Ever.
 
 
-------[ 5.1.2 - Upgrading (preserve your grind)
+------[ 5.1.2 - Alternative Methods
 
-    Already got XP? Here's how to keep it:
+    PlatformIO (for developers):
+        $ git pull
+        $ pio run -t upload -e m5cardputer
+        # Your pig remembers everything
 
-        Option A - PlatformIO (recommended):
-            $ git pull
-            $ pio run -t upload -e m5cardputer
-            # Your pig remembers everything
+    ESP Web Tool (browser, no install):
+        - Download firmware.bin from releases (NOT the merged one)
+        - Go to https://espressif.github.io/esptool-js/
+        - Connect, add firmware.bin at offset 0x10000
+        - Flash ONLY firmware, NVS stays safe
 
-        Option B - ESP Web Tool (browser):
-            - Download firmware.bin from releases (NOT the merged one)
-            - Go to https://espressif.github.io/esptool-js/
-            - Connect, add firmware.bin at offset 0x10000
-            - Flash ONLY firmware, NVS stays safe
+    M5 Burner USB (fresh install only):
+        - Flash the merged bin (porkchop_vX.X.X.bin)
+        - Works but nukes XP on every flash
+        - Fine for first time, terrible for updates
 
-        Option C - M5 Burner:
-            - Flash the merged bin
-            - Watch your MUDGE UNCHA1NED become BACON N00B
-            - Cry, then grind again
+    M5 Burner OTA (DON'T):
+        - Wrong binary format in the catalog
+        - Will bootloop (recoverable via USB reflash)
+        - Just use the SD card method instead
 
     We provide both binaries in releases:
-        - porkchop_v0.x.x.bin     = Merged, fresh install, nukes XP
-        - firmware.bin            = App only, flash at 0x10000, keeps XP
+        - firmware.bin            = SD card / Launcher, preserves XP
+        - porkchop_v0.x.x.bin     = M5 Burner USB only, nukes XP
 
 
 --[ 6 - Controls

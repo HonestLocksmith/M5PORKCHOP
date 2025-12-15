@@ -411,11 +411,17 @@ void Porkchop::handleInput() {
             Config::wifi().doNoHam = newState;
             Config::save();  // Persist to config file
             
+            // Track passive time for Silent Witness achievement
+            SessionStats& sess = const_cast<SessionStats&>(XP::getSession());
             if (newState) {
+                // Starting passive mode - record start time
+                sess.passiveTimeStart = millis();
                 Display::showToast("DO NO HAM: ON");
                 delay(400);
                 Display::showToast("BRAVO 6, GOING DARK");
             } else {
+                // Ending passive mode - clear start time
+                sess.passiveTimeStart = 0;
                 Display::showToast("DO NO HAM: OFF");
                 delay(400);
                 Display::showToast("WEAPONS HOT");

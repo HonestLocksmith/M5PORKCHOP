@@ -135,6 +135,24 @@ void SwineStats::handleInput() {
         return;
     }
     
+    // Enter key cycles through available title overrides (only on STATS tab)
+    if (M5Cardputer.Keyboard.isKeyPressed(KEY_ENTER) && currentTab == StatsTab::STATS) {
+        TitleOverride next = XP::getNextAvailableOverride();
+        XP::setTitleOverride(next);
+        
+        // Show toast confirming title change
+        const char* newTitle = XP::getDisplayTitle();
+        if (next == TitleOverride::NONE) {
+            Display::showToast("T1TLE: DEFAULT");
+        } else {
+            char buf[32];
+            snprintf(buf, sizeof(buf), "T1TLE: %s", newTitle);
+            Display::showToast(buf);
+        }
+        delay(500);
+        return;
+    }
+    
     // Exit on backtick or Esc
     if (M5Cardputer.Keyboard.isKeyPressed('`') || M5Cardputer.Keyboard.isKeyPressed(KEY_BACKSPACE)) {
         hide();
@@ -490,12 +508,18 @@ void SwineStats::drawStatsTab(M5Canvas& canvas) {
     
     // Level and class info
     uint8_t level = XP::getLevel();
-    const char* title = XP::getTitle();
+    const char* title = XP::getDisplayTitle();  // Use display title (may be override)
     const char* className = XP::getClassName();
     uint8_t progress = XP::getProgress();
     
+    // Show title with indicator if it's an override
     char lvlBuf[48];
-    snprintf(lvlBuf, sizeof(lvlBuf), "LVL %d: %s", level, title);
+    if (XP::getTitleOverride() != TitleOverride::NONE) {
+        // Show override title with asterisk
+        snprintf(lvlBuf, sizeof(lvlBuf), "LVL %d: %s*", level, title);
+    } else {
+        snprintf(lvlBuf, sizeof(lvlBuf), "LVL %d: %s", level, title);
+    }
     canvas.drawString(lvlBuf, 5, 14);
     
     // Class on right

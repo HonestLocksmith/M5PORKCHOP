@@ -68,6 +68,21 @@ static const struct {
     { ACH_WPA3_HUNTER,    "WPA3 HUNT3R",    "Find 25 WPA3 networks" },
     { ACH_MAX_LEVEL,      "MAX L3VEL",      "Reach level 40" },
     { ACH_ABOUT_JUNKIE,   "AB0UT_JUNK13",   "Read the fine print" },
+    // DO NO HAM achievements (v0.1.4+) - pacifist/stealth playstyle
+    { ACH_GOING_DARK,     "G01NG D4RK",     "5 minutes in passive mode" },
+    { ACH_GHOST_PROTOCOL, "GH0ST PR0T0C0L", "30 min passive + 50 networks" },
+    { ACH_SHADOW_BROKER,  "SH4D0W BR0K3R",  "500 passive networks (unlocks title)" },
+    { ACH_SILENT_ASSASSIN,"S1L3NT 4SS4SS1N","First passive PMKID capture" },
+    { ACH_ZEN_MASTER,     "Z3N M4ST3R",     "5 passive PMKIDs (unlocks title)" },
+    // BOAR BROS achievements (v0.1.4+) - network protection playstyle
+    { ACH_FIRST_BRO,      "F1RST BR0",      "Add first network to BOAR BROS" },
+    { ACH_FIVE_FAMILIES,  "F1V3 F4M1L13S",  "5 networks in BOAR BROS" },
+    { ACH_MERCY_MODE,     "M3RCY M0D3",     "First mid-attack exclusion" },
+    { ACH_WITNESS_PROTECT,"W1TN3SS PR0T3CT","25 networks protected (unlocks title)" },
+    { ACH_FULL_ROSTER,    "FULL R0ST3R",    "100 networks in BOAR BROS (max)" },
+    // Combined DO NO HAM + BOAR BROS achievements
+    { ACH_INNER_PEACE,    "1NN3R P34C3",    "1hr passive + 10 bros + no deauths" },
+    { ACH_PACIFIST_RUN,   "P4C1F1ST RUN",   "50+ networks, all added as bros" },
 };
 
 void AchievementsMenu::init() {

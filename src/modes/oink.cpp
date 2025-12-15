@@ -4,6 +4,7 @@
 #include "../core/config.h"
 #include "../core/wsl_bypasser.h"
 #include "../core/sdlog.h"
+#include "../core/xp.h"
 #include "../ui/display.h"
 #include "../piglet/mood.h"
 #include "../piglet/avatar.h"
@@ -281,6 +282,15 @@ void OinkMode::start() {
     autoState = AutoState::SCANNING;
     stateStartTime = millis();
     selectionIndex = 0;
+    
+    // If entering OINK with DO NO HAM already enabled, set passive time start
+    // (D-key handler only sets this on toggle, not on mode entry)
+    if (doNoHam) {
+        SessionStats& sess = const_cast<SessionStats&>(XP::getSession());
+        if (sess.passiveTimeStart == 0) {
+            sess.passiveTimeStart = millis();
+        }
+    }
     
     Mood::setStatusMessage("hunting truffles");
     Display::setWiFiStatus(true);
@@ -2000,6 +2010,10 @@ void OinkMode::sendDeauthBurst(const uint8_t* bssid, const uint8_t* station, uin
     uint8_t broadcast[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
     uint8_t jitterMax = SwineStats::getDeauthJitterMax();
     
+    // Mark session as having deauthed (for Silent Witness achievement tracking)
+    SessionStats& sess = const_cast<SessionStats&>(XP::getSession());
+    sess.everDeauthed = true;
+    
     for (uint8_t i = 0; i < count; i++) {
         // AP -> Client (pretend to be AP)
         sendDeauthFrame(bssid, station, 7);  // Class 3 frame from non-associated station
@@ -2376,6 +2390,9 @@ bool OinkMode::excludeNetwork(int index) {
     boarBros[bssid] = ssid;
     saveBoarBros();
     
+    // Check if this is a mid-attack exclusion (mercy save) vs normal exclusion
+    bool isMidAttack = (targetIndex == index && deauthing);
+    
     // If this was the current attack target, abort the attack immediately
     if (targetIndex == index) {
         deauthing = false;
@@ -2387,6 +2404,14 @@ bool OinkMode::excludeNetwork(int index) {
         Serial.println("[OINK] Aborted attack on excluded network");
     }
     
-    Serial.printf("[OINK] Added BOAR BRO: %s (new mapSize=%d)\n", ssid.c_str(), (int)boarBros.size());
+    // Award XP for BOAR BROS action
+    if (isMidAttack) {
+        XP::addXP(XPEvent::BOAR_BRO_MERCY);  // +15 XP - mid-attack mercy!
+    } else {
+        XP::addXP(XPEvent::BOAR_BRO_ADDED);  // +5 XP - normal exclusion
+    }
+    
+    Serial.printf("[OINK] Added BOAR BRO: %s (new mapSize=%d) mercy=%d\n", 
+                  ssid.c_str(), (int)boarBros.size(), isMidAttack);
     return true;
 }

@@ -669,10 +669,11 @@
     | Hardware Setup            | RX Pin | TX Pin | Baud    |
     +---------------------------+--------+--------+---------+
     | Cardputer + Grove GPS     | G1     | G2     | 115200  |
-    | Cardputer-Adv + LoRa Cap  | G13    | G15    | 115200  |
+    | Cardputer-Adv + LoRa Cap  | G15    | G13    | 115200  |
     +---------------------------+--------+--------+---------+
 
     The Cap LoRa868 (U201) uses the EXT 14-pin bus, not Grove.
+    RX/TX are swapped vs what you'd expect - ESP32 RX connects to GPS TX.
     After flashing, go to Settings and change GPS RX/TX pins.
 
 
@@ -849,7 +850,8 @@
 
     GPS pin defaults work for original Cardputer + Grove GPS. If you're
     running Cardputer-Adv with Cap LoRa868 module, change pins to:
-    RX=13, TX=15. GPS reinits automatically when pins change - no reboot.
+    RX=15, TX=13. Yes, swapped - ESP32 RX receives from GPS TX.
+    GPS reinits automatically when pins change - no reboot.
 
 
 --[ 8 - ML Training Pipeline

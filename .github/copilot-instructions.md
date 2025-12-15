@@ -538,11 +538,11 @@ case PorkchopMode::NEW_MODE:
 |----------------|------------|------------|-----------|-------|
 | Original Cardputer + Grove GPS Unit | G1 | G2 | 115200 | Default config |
 | Cardputer v1.1 + Grove GPS Unit | G1 | G2 | 115200 | Default config |
-| Cardputer-Adv + Cap LoRa868 (U201) | G13 | G15 | 115200 | Change in Settings |
+| Cardputer-Adv + Cap LoRa868 (U201) | G15 | G13 | 115200 | Change in Settings |
 
 Users with Cardputer-Adv and Cap LoRa868 module must change GPS pins in Settings Menu:
-- GPS RX Pin: 13
-- GPS TX Pin: 15
+- GPS RX Pin: 15 (ESP32 receives from GPS TX on Cap-Bus pin 1)
+- GPS TX Pin: 13 (ESP32 sends to GPS RX on Cap-Bus pin 2)
 
 The Cap LoRa868 connects via the EXT 2.54-14P bus, not the Grove HY2.0-4P port.
 

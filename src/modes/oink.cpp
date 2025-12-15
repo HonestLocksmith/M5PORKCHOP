@@ -3,6 +3,7 @@
 #include "oink.h"
 #include "../core/config.h"
 #include "../core/wsl_bypasser.h"
+#include "../core/sdlog.h"
 #include "../ui/display.h"
 #include "../piglet/mood.h"
 #include "../piglet/avatar.h"
@@ -344,6 +345,7 @@ void OinkMode::update() {
         Mood::onPMKIDCaptured(pendingPMKIDSSID);
         lastPwnedSSID = String(pendingPMKIDSSID);  // PMKID counts as pwned!
         Display::showLoot(lastPwnedSSID);  // Show PWNED banner in top bar
+        SDLog::log("OINK", "PMKID captured: %s", pendingPMKIDSSID);
         pendingPMKIDCapture = false;
     }
     
@@ -551,6 +553,7 @@ void OinkMode::update() {
                         // Got handshake! Mark network and move to next
                         networks[targetIndex].hasHandshake = true;
                         Serial.printf("[OINK] Handshake captured for %s!\n", networks[targetIndex].ssid);
+                        SDLog::log("OINK", "Handshake captured: %s", networks[targetIndex].ssid);
                         autoState = AutoState::WAITING;
                         stateStartTime = now;
                         deauthing = false;
@@ -1384,6 +1387,8 @@ void OinkMode::autoSaveCheck() {
                 hs.saved = true;
                 Serial.printf("[OINK] Handshake saved: %s (pcap:%s 22000:%s)\n", 
                               filename, pcapOk ? "OK" : "FAIL", hs22kOk ? "OK" : "FAIL");
+                SDLog::log("OINK", "Handshake saved: %s (pcap:%s 22000:%s)", 
+                           hs.ssid, pcapOk ? "OK" : "FAIL", hs22kOk ? "OK" : "FAIL");
                 
                 // Save SSID to companion .txt file for later reference
                 char txtFilename[64];
@@ -1732,6 +1737,8 @@ bool OinkMode::saveAllPMKIDs() {
             
             if (savePMKID22000(p, filename)) {
                 p.saved = true;
+                Serial.printf("[OINK] PMKID saved: %s\n", p.ssid);
+                SDLog::log("OINK", "PMKID saved: %s", p.ssid);
                 
                 // Save SSID to companion .txt file (same pattern as handshakes)
                 char txtFilename[64];

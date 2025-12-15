@@ -1,6 +1,7 @@
 // Configuration management implementation
 
 #include "config.h"
+#include "sdlog.h"
 #include <M5Cardputer.h>
 #include <SD.h>
 #include <SPIFFS.h>
@@ -29,6 +30,7 @@ bool Config::init() {
     } else {
         Serial.println("[CONFIG] SD card mounted");
         sdAvailable = true;
+        SDLog::log("CFG", "SD card mounted OK");
         
         // Create directories on SD if needed
         if (!SD.exists("/handshakes")) SD.mkdir("/handshakes");
@@ -328,6 +330,7 @@ bool Config::loadWpaSecKeyFromFile() {
     // Delete the file for security
     if (SD.remove(keyFile)) {
         Serial.println("[CONFIG] Deleted wpasec_key.txt after import");
+        SDLog::log("CFG", "WPA-SEC key imported from file");
     } else {
         Serial.println("[CONFIG] Warning: Could not delete wpasec_key.txt");
     }

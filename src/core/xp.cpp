@@ -1,6 +1,7 @@
 // Porkchop RPG XP and Leveling System Implementation
 
 #include "xp.h"
+#include "sdlog.h"
 #include "../ui/display.h"
 #include "../ui/swine_stats.h"
 #include <M5Unified.h>
@@ -396,6 +397,7 @@ void XP::addXP(uint16_t amount) {
         data.cachedLevel = newLevel;
         Serial.printf("[XP] LEVEL UP! %d -> %d (%s)\n", 
                       oldLevel, newLevel, getTitleForLevel(newLevel));
+        SDLog::log("XP", "LEVEL UP: %d -> %d (%s)", oldLevel, newLevel, getTitleForLevel(newLevel));
         
         if (levelUpCallback) {
             levelUpCallback(oldLevel, newLevel);
@@ -587,6 +589,7 @@ void XP::unlockAchievement(PorkAchievement ach) {
     }
     
     Serial.printf("[XP] Achievement unlocked: %s\n", ACHIEVEMENT_NAMES[idx]);
+    SDLog::log("XP", "Achievement: %s", ACHIEVEMENT_NAMES[idx]);
     
     // Save immediately to persist the achievement
     save();

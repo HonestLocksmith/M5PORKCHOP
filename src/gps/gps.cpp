@@ -2,6 +2,7 @@
 
 #include "gps.h"
 #include "../core/config.h"
+#include "../core/sdlog.h"
 #include "../piglet/mood.h"
 #include "../ui/display.h"
 
@@ -127,10 +128,12 @@ void GPS::updateData() {
         Mood::onGPSFix();
         Display::setGPSStatus(true);
         Serial.println("[GPS] Fix acquired!");
+        SDLog::log("GPS", "Fix acquired (sats: %d)", currentData.satellites);
     } else if (!currentData.fix && hadFix) {
         Mood::onGPSLost();
         Display::setGPSStatus(false);
         Serial.println("[GPS] Fix lost");
+        SDLog::log("GPS", "Fix lost");
     }
 }
 

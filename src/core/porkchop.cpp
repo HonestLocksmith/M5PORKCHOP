@@ -19,6 +19,7 @@
 #include "../web/fileserver.h"
 #include "config.h"
 #include "xp.h"
+#include "sdlog.h"
 
 Porkchop::Porkchop() 
     : currentMode(PorkchopMode::IDLE)
@@ -112,6 +113,7 @@ void Porkchop::init() {
     Avatar::setState(AvatarState::HAPPY);
     
     Serial.println("[PORKCHOP] Initialized");
+    SDLog::log("PORK", "Initialized - LV%d %s", XP::getLevel(), XP::getTitle());
 }
 
 void Porkchop::update() {
@@ -191,18 +193,22 @@ void Porkchop::setMode(PorkchopMode mode) {
             Avatar::setState(AvatarState::NEUTRAL);
             Mood::onIdle();
             XP::save();  // Save XP when returning to idle
+            SDLog::log("PORK", "Mode: IDLE");
             break;
         case PorkchopMode::OINK_MODE:
             Avatar::setState(AvatarState::HUNTING);
+            SDLog::log("PORK", "Mode: OINK (DoNoHam: %s)", Config::wifi().doNoHam ? "ON" : "OFF");
             OinkMode::start();
             break;
         case PorkchopMode::WARHOG_MODE:
             Avatar::setState(AvatarState::EXCITED);
             Display::showToast("Sniffing the air...");
+            SDLog::log("PORK", "Mode: WARHOG");
             WarhogMode::start();
             break;
         case PorkchopMode::PIGGYBLUES_MODE:
             Avatar::setState(AvatarState::ANGRY);
+            SDLog::log("PORK", "Mode: PIGGYBLUES");
             PiggyBluesMode::start();
             // If user aborted warning dialog, return to menu
             if (!PiggyBluesMode::isRunning()) {
@@ -212,6 +218,7 @@ void Porkchop::setMode(PorkchopMode mode) {
             break;
         case PorkchopMode::SPECTRUM_MODE:
             Avatar::setState(AvatarState::HUNTING);
+            SDLog::log("PORK", "Mode: SPECTRUM");
             SpectrumMode::start();
             break;
         case PorkchopMode::MENU:

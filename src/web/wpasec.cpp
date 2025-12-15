@@ -6,6 +6,7 @@
 #include <HTTPClient.h>
 #include <SD.h>
 #include "../core/config.h"
+#include "../core/sdlog.h"
 
 // Static member initialization
 bool WPASec::cacheLoaded = false;
@@ -371,6 +372,7 @@ bool WPASec::fetchResults() {
     snprintf(statusMessage, sizeof(statusMessage), "%d cracked (%d new)", 
              crackedCache.size(), newCracks);
     Serial.printf("[WPASEC] Fetched: %d total, %d new\n", crackedCache.size(), newCracks);
+    SDLog::log("WPASEC", "Fetched: %d cracked (%d new)", crackedCache.size(), newCracks);
     
     return true;
 }
@@ -479,6 +481,7 @@ bool WPASec::uploadCapture(const char* pcapPath) {
     if (statusLine.indexOf("200") > 0 || statusLine.indexOf("302") > 0) {
         strcpy(statusMessage, "Upload OK");
         Serial.println("[WPASEC] Upload successful");
+        SDLog::log("WPASEC", "Upload OK: %s", filename.c_str());
         
         // Extract BSSID from filename and mark as uploaded
         String baseName = filename;
@@ -496,6 +499,7 @@ bool WPASec::uploadCapture(const char* pcapPath) {
     
     snprintf(lastError, sizeof(lastError), "Upload failed: %s", statusLine.substring(0, 30).c_str());
     strcpy(statusMessage, "Upload failed");
+    SDLog::log("WPASEC", "Upload failed: %s", filename.c_str());
     Serial.printf("[WPASEC] Upload failed: %s\n", statusLine.c_str());
     return false;
 }

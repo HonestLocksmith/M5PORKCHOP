@@ -15,6 +15,10 @@ void SDLog::init() {
 }
 
 void SDLog::setEnabled(bool enabled) {
+    Serial.printf("[SDLOG] setEnabled(%s), SD available: %s\n", 
+                  enabled ? "true" : "false", 
+                  Config::isSDAvailable() ? "true" : "false");
+    
     logEnabled = enabled && Config::isSDAvailable();
     
     if (logEnabled && currentLogFile.length() == 0) {
@@ -22,7 +26,10 @@ void SDLog::setEnabled(bool enabled) {
     }
     
     if (logEnabled) {
+        Serial.printf("[SDLOG] Logging now ENABLED to: %s\n", currentLogFile.c_str());
         log("SDLOG", "SD logging enabled");
+    } else {
+        Serial.printf("[SDLOG] Logging DISABLED\n");
     }
 }
 
@@ -35,10 +42,8 @@ void SDLog::ensureLogFile() {
         SD.mkdir("/logs");
     }
     
-    // Generate filename with millis (GPS time may not be available)
-    char buf[48];
-    snprintf(buf, sizeof(buf), "/logs/porkchop_%lu.log", millis());
-    currentLogFile = String(buf);
+    // Use fixed filename - easier to find and read
+    currentLogFile = "/logs/porkchop.log";
     
     // Create file with header
     File f = SD.open(currentLogFile.c_str(), FILE_WRITE);
@@ -63,6 +68,7 @@ void SDLog::log(const char* tag, const char* format, ...) {
         // Try to create log file if it doesn't exist
         ensureLogFile();
         if (currentLogFile.length() == 0) {
+            Serial.printf("[SDLOG] ERROR: Could not create log file\n");
             return;
         }
     }
@@ -73,6 +79,9 @@ void SDLog::log(const char* tag, const char* format, ...) {
     va_start(args, format);
     vsnprintf(buffer, sizeof(buffer), format, args);
     va_end(args);
+    
+    // Debug: show what we're logging
+    Serial.printf("[SDLOG->SD] [%s] %s\n", tag, buffer);
     
     // Try to open file with retry on failure (SD can be busy with other operations)
     File f;

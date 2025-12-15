@@ -28,50 +28,16 @@ String LogViewer::findLatestLogFile() {
         return "";
     }
     
-    File dir = SD.open("/logs");
-    if (!dir || !dir.isDirectory()) {
-        Serial.println("[LOGVIEW] /logs directory not found");
-        return "";
+    // Use fixed filename - always the same file
+    const char* logFile = "/logs/porkchop.log";
+    
+    if (SD.exists(logFile)) {
+        Serial.printf("[LOGVIEW] Found: %s\n", logFile);
+        return String(logFile);
     }
     
-    String latestFile = "";
-    uint32_t latestTime = 0;
-    
-    File entry;
-    while ((entry = dir.openNextFile())) {
-        if (!entry.isDirectory()) {
-            String name = String(entry.name());
-            Serial.printf("[LOGVIEW] Found file: %s\n", name.c_str());
-            
-            if (name.endsWith(".log")) {
-                // Extract millis from filename: porkchop_XXXXX.log
-                // entry.name() may return full path or just filename
-                int underscorePos = name.lastIndexOf('_');
-                int dotPos = name.lastIndexOf('.');
-                if (underscorePos >= 0 && dotPos > underscorePos) {
-                    String numStr = name.substring(underscorePos + 1, dotPos);
-                    uint32_t fileTime = numStr.toInt();
-                    Serial.printf("[LOGVIEW] Parsed time: %lu from %s\n", fileTime, numStr.c_str());
-                    if (fileTime > latestTime) {
-                        latestTime = fileTime;
-                        // Build full path - handle both cases
-                        if (name.startsWith("/")) {
-                            latestFile = name;
-                        } else if (name.startsWith("logs/")) {
-                            latestFile = "/" + name;
-                        } else {
-                            latestFile = "/logs/" + name;
-                        }
-                    }
-                }
-            }
-        }
-        entry.close();
-    }
-    dir.close();
-    
-    Serial.printf("[LOGVIEW] Latest file: %s\n", latestFile.c_str());
-    return latestFile;
+    Serial.println("[LOGVIEW] Log file not found");
+    return "";
 }
 
 void LogViewer::loadLogFile() {

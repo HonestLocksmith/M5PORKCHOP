@@ -45,6 +45,29 @@ README and user-facing docs use oldschool Phrack hacker magazine style:
 - `src/core/wsl_bypasser.cpp/h` - ESP32 WiFi frame injection for deauth/disassoc, MAC randomization
 - `src/core/xp.cpp/h` - RPG leveling system with NVS persistence, achievements, XP events
 
+### SD Logging System
+
+**Session-only by design** - SD logging does NOT persist across reboots. This is intentional:
+- **Fail-safe**: Reboot always returns to clean state (no stuck logging filling SD card)
+- **No forgotten logging**: Won't fill SD card over weeks of idle operation
+- **Debug sessions are intentional**: User consciously enables logging for debugging
+- **Less SD wear**: Reduces unnecessary write cycles
+
+**Usage:**
+- Toggle via Settings Menu: "SD Log" item (OFF by default after reboot)
+- API: `SDLog::log("TAG", "format %s", args...)` - logs to `/logs/porkchop_YYYYMMDD.log`
+- Log files viewed via "View Log" in Settings Menu
+
+**Instrumented Components:**
+- `porkchop.cpp` - Mode transitions (OINK/WARHOG/PIGGYBLUES/SPECTRUM)
+- `config.cpp` - SD mount status, WPA-SEC key import
+- `oink.cpp` - Handshake/PMKID capture and save events
+- `wpasec.cpp` - Upload success/failure, fetch results
+- `gps.cpp` - GPS fix acquired/lost
+- `xp.cpp` - Level ups, achievement unlocks
+
+**NOT persisted in config** - `SDLog::logEnabled` is a runtime-only flag initialized to `false`.
+
 ### Modes
 - `src/modes/oink.cpp/h` - OinkMode: WiFi scanning, channel hopping, promiscuous mode, handshake capture
 - `src/modes/warhog.cpp/h` - WarhogMode: GPS-enabled wardriving, multiple export formats (CSV, Wigle, Kismet, ML Training)
@@ -780,6 +803,20 @@ Legacy export functions (`exportWigle`, `exportKismet`) are deprecated - data is
 ## Intentional Design Patterns (NOT BUGS)
 
 These patterns may look like issues during code review but are intentional design decisions:
+
+### SD Logging - Session Only (NOT Persisted)
+`SDLog::logEnabled` resets to `false` on every reboot:
+```cpp
+bool SDLog::logEnabled = false;  // Runtime only, never saved to config
+```
+**Why**: This is intentional, not a bug. Debug logging is a conscious per-session choice:
+- Fail-safe: reboot always returns to clean state
+- No forgotten logging: won't fill SD card over weeks of idle operation
+- Debug sessions are intentional: user must consciously enable
+- Less SD wear: reduces unnecessary write cycles
+- Serial.printf already covers boot sequence debugging
+
+Do NOT add persistence for `sdLogging` to config files.
 
 ### OINK Mode - Single-Slot Deferred Events
 The `pendingNetworkAdd` pattern uses a single slot, not a queue:

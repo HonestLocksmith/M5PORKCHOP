@@ -446,7 +446,17 @@
 
 ----[ 3.7 - Machine Learning
 
-    PORKCHOP doesn't just capture - it thinks. The ML system extracts
+    STATUS: EXPERIMENTAL. TRUST ISSUES AHEAD.
+    
+    The heuristics run. The scaffold exists. The training pipeline works.
+    What's missing: enough labeled data to make the pig smart, and enough
+    hubris to ship it as "production ready." We have the second part.
+    Working on the first.
+    
+    Translation: don't bet your pentest report on these classifications yet.
+    But feel free to collect data and help train the pig's brain.
+
+    Here's what we're building toward - the ML system extracts
     32 features from every beacon frame:
 
         * Signal characteristics (RSSI, noise patterns)
@@ -457,10 +467,10 @@
 
     Built-in heuristic classifier detects:
 
-        [!] ROGUE_AP    - Strong signal + abnormal timing + missing IEs
-        [!] EVIL_TWIN   - Hidden SSID + suspiciously strong signal
-        [!] VULNERABLE  - Open/WEP/WPA1-only/WPS enabled
-        [!] DEAUTH_TGT  - No WPA3 or PMF = free real estate
+        [!] ROGUE_AP    - Too loud, too weird, too sus. Honeypot vibes.
+        [!] EVIL_TWIN   - Hiding its name but screaming its signal. Trap.
+        [!] VULNERABLE  - Open/WEP/WPA1/WPS - security from 2004
+        [!] DEAUTH_TGT  - No WPA3, no PMF, no protection, no mercy
 
     Want real ML? Train your own model on Edge Impulse and drop it in.
     The scaffold is ready.
@@ -487,7 +497,8 @@
             * IE 50 (Extended Rates)    - Rate analysis
             * IE 221 (Vendor Specific)  - WPS, WPA1, vendor ID
 
-        Higher CPU. More memory. More features. Worth it.
+        Burns more cycles. Eats more RAM. Catches more sketchy APs.
+        The juice is worth the squeeze.
 
     Toggle in Settings: [ML Mode: Basic/Enhanced]
 
@@ -876,7 +887,7 @@
     Dark themes (top) keep things tactical. Inverted themes (bottom)
     exist for outdoor visibility or psychological warfare on bystanders.
 
-    Theme persists across reboots. Your piglet remembers its aesthetic.
+    Theme persists across reboots. The pig never forgets a color scheme.
 
 
 --[ 8 - ML Training Pipeline
@@ -885,7 +896,8 @@
 
 ----[ 8.1 - Data Collection
 
-    WARHOG mode automatically collects ML training data. No extra steps.
+    WARHOG mode hoovers up ML training data automatically. Drive around,
+    feed the brain. Zero extra effort required.
 
     How it works:
         - Every network gets 32 features extracted from beacon frames
@@ -911,11 +923,11 @@
 
     The script outputs ml_training_ei.csv with string labels:
 
-        normal        = Legit ISP routers, standard secure configs
-        rogue_ap      = Strong signal + suspicious characteristics
-        evil_twin     = Impersonating known network - label manually
-        deauth_target = No WPA3/PMF - free real estate
-        vulnerable    = Open/WEP/WPS enabled
+        normal        = Boring ISP gear doing boring ISP things
+        rogue_ap      = Suspiciously loud. Probably evil. Trust issues.
+        evil_twin     = Identity theft but make it wireless
+        deauth_target = No WPA3/PMF - begging for disconnection
+        vulnerable    = Open/WEP/WPS - what decade is this
 
     The auto-labeler catches the obvious stuff. For real rogue/evil twin
     samples, you gotta set up sketchy APs in the lab and label manually.
@@ -1050,7 +1062,7 @@
 
     Special shoutout to the Cardputer-ADV + LoRa testing crew:
 
-        * L1TTL3M1XY - sacrificed hardware to my broken RX/TX pin configs
+        * littlemixy - sacrificed hardware to my broken RX/TX pin configs
         * BansheeBacklash - emotional support through the GPIO nightmare
 
     These absolute units stuck around while we debugged pin 13 vs 15

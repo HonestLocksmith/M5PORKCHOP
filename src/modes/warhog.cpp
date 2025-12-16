@@ -36,6 +36,10 @@ static const size_t HEAP_CRITICAL_THRESHOLD = 25000;
 static const int SD_RETRY_COUNT = 3;
 static const int SD_RETRY_DELAY_MS = 10;
 
+// WiGLE file size limit for upload compatibility (400KB - leave room for headers)
+// Files larger than this will be rotated to a new file
+static const size_t WIGLE_FILE_MAX_SIZE = 400000;
+
 // Graceful stop request flag for background scan task
 static volatile bool stopRequested = false;
 
@@ -588,8 +592,27 @@ void WarhogMode::appendMLEntry(const uint8_t* bssid, const char* ssid,
     f.close();
 }
 
+// Check if WiGLE file needs rotation due to size
+void WarhogMode::checkWigleFileRotation() {
+    if (currentWigleFilename.length() == 0) return;
+    
+    File f = SD.open(currentWigleFilename.c_str(), FILE_READ);
+    if (!f) return;
+    
+    size_t fileSize = f.size();
+    f.close();
+    
+    if (fileSize >= WIGLE_FILE_MAX_SIZE) {
+        Serial.printf("[WARHOG] WiGLE file rotated at %d bytes\n", fileSize);
+        currentWigleFilename = "";  // Force new file creation on next append
+    }
+}
+
 // Ensure WiGLE file exists with header
 bool WarhogMode::ensureWigleFileReady() {
+    // Check if current file needs rotation
+    checkWigleFileRotation();
+    
     if (currentWigleFilename.length() > 0) return true;
     
     // Ensure wardriving directory exists

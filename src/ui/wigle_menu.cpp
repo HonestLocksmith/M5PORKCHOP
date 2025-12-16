@@ -73,6 +73,9 @@ void WigleMenu::scanFiles() {
                     WigleFileStatus::UPLOADED : WigleFileStatus::LOCAL;
                 
                 files.push_back(info);
+                
+                // Cap at 50 files to prevent memory issues
+                if (files.size() >= 50) break;
             }
         }
         entry.close();

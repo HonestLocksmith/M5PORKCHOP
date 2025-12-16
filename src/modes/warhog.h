@@ -84,6 +84,7 @@ private:
     static bool ensureCSVFileReady();
     static bool ensureMLFileReady();
     static bool ensureWigleFileReady();
+    static void checkWigleFileRotation();
     static void appendCSVEntry(const uint8_t* bssid, const char* ssid,
                                int8_t rssi, uint8_t channel, wifi_auth_mode_t auth,
                                double lat, double lon, double alt);

@@ -96,10 +96,10 @@ bool WiGLE::loadUploadedList() {
     File f = SD.open(UPLOADED_FILE, FILE_READ);
     if (!f) return false;
     
-    while (f.available()) {
+    while (f.available() && uploadedFiles.size() < 200) {
         String line = f.readStringUntil('\n');
         line.trim();
-        if (!line.isEmpty()) {
+        if (!line.isEmpty() && line.length() < 100) {  // Sanity check
             uploadedFiles.push_back(line);
         }
     }
@@ -192,8 +192,8 @@ bool WiGLE::uploadFile(const char* csvPath) {
     
     size_t fileSize = csvFile.size();
     // WiGLE limit is 180MB, but we'll be more conservative on ESP32
-    if (fileSize > 1000000) {  // 1MB limit for ESP32 memory
-        strcpy(lastError, "File too large");
+    if (fileSize > 500000) {  // 500KB limit for ESP32 memory safety
+        strcpy(lastError, "File too large (>500KB)");
         csvFile.close();
         return false;
     }
@@ -201,39 +201,11 @@ bool WiGLE::uploadFile(const char* csvPath) {
     strcpy(statusMessage, "Uploading...");
     Serial.printf("[WIGLE] Uploading %s (%d bytes)\n", csvPath, fileSize);
     
-    // Read file into buffer
-    uint8_t* buffer = (uint8_t*)malloc(fileSize);
-    if (!buffer) {
-        strcpy(lastError, "Out of memory");
-        csvFile.close();
-        return false;
-    }
-    
-    csvFile.read(buffer, fileSize);
-    csvFile.close();
-    
-    // Build multipart form data
+    // Build multipart form data boundaries
     String boundary = "----PorkchopWiGLE" + String(millis());
-    
-    WiFiClientSecure client;
-    client.setInsecure();  // Skip certificate validation
-    
-    if (!client.connect(API_HOST, 443)) {
-        strcpy(lastError, "Connection failed");
-        free(buffer);
-        return false;
-    }
-    
-    // Extract filename from path
     String filename = getFilenameFromPath(csvPath);
     
-    // Build Basic Auth header
-    String apiName = Config::wifi().wigleApiName;
-    String apiToken = Config::wifi().wigleApiToken;
-    String credentials = apiName + ":" + apiToken;
-    String authHeader = "Basic " + base64::encode(credentials);
-    
-    // Build body parts
+    // Build body parts (headers only, file streamed separately)
     String bodyStart = "--" + boundary + "\r\n";
     bodyStart += "Content-Disposition: form-data; name=\"file\"; filename=\"" + filename + "\"\r\n";
     bodyStart += "Content-Type: text/csv\r\n\r\n";
@@ -242,7 +214,23 @@ bool WiGLE::uploadFile(const char* csvPath) {
     
     size_t contentLength = bodyStart.length() + fileSize + bodyEnd.length();
     
-    // Send request
+    // Build Basic Auth header
+    String apiName = Config::wifi().wigleApiName;
+    String apiToken = Config::wifi().wigleApiToken;
+    String credentials = apiName + ":" + apiToken;
+    String authHeader = "Basic " + base64::encode(credentials);
+    
+    WiFiClientSecure client;
+    client.setInsecure();  // Skip certificate validation
+    client.setTimeout(60);  // 60 second timeout for large files
+    
+    if (!client.connect(API_HOST, 443)) {
+        strcpy(lastError, "Connection failed");
+        csvFile.close();
+        return false;
+    }
+    
+    // Send HTTP headers
     client.print("POST " + String(UPLOAD_PATH) + " HTTP/1.1\r\n");
     client.print("Host: " + String(API_HOST) + "\r\n");
     client.print("Authorization: " + authHeader + "\r\n");
@@ -250,20 +238,64 @@ bool WiGLE::uploadFile(const char* csvPath) {
     client.print("Content-Length: " + String(contentLength) + "\r\n");
     client.print("Connection: close\r\n\r\n");
     
+    // Send multipart header
     client.print(bodyStart);
-    client.write(buffer, fileSize);
+    
+    // Stream file in chunks (4KB at a time) - avoid loading entire file in RAM
+    const size_t CHUNK_SIZE = 4096;
+    uint8_t chunk[CHUNK_SIZE];
+    size_t bytesRemaining = fileSize;
+    size_t bytesSent = 0;
+    
+    while (bytesRemaining > 0 && csvFile.available()) {
+        size_t toRead = (bytesRemaining > CHUNK_SIZE) ? CHUNK_SIZE : bytesRemaining;
+        size_t bytesRead = csvFile.read(chunk, toRead);
+        
+        if (bytesRead == 0) {
+            Serial.println("[WIGLE] Read error during upload");
+            break;
+        }
+        
+        size_t written = client.write(chunk, bytesRead);
+        if (written != bytesRead) {
+            Serial.printf("[WIGLE] Write error: %d of %d bytes\n", written, bytesRead);
+            strcpy(lastError, "Write error");
+            csvFile.close();
+            client.stop();
+            return false;
+        }
+        
+        bytesSent += bytesRead;
+        bytesRemaining -= bytesRead;
+        
+        // Yield to prevent watchdog timeout on large files
+        yield();
+    }
+    
+    csvFile.close();
+    
+    if (bytesSent != fileSize) {
+        Serial.printf("[WIGLE] Incomplete upload: %d of %d bytes\n", bytesSent, fileSize);
+        strcpy(lastError, "Incomplete upload");
+        client.stop();
+        return false;
+    }
+    
+    // Send multipart footer
     client.print(bodyEnd);
+    client.flush();  // Ensure all data is sent before waiting for response
     
-    free(buffer);
+    Serial.printf("[WIGLE] Sent %d bytes, waiting for response...\n", bytesSent);
     
-    // Read response
+    // Read response - increase timeout for larger files (WiGLE processing time)
     uint32_t timeout = millis();
-    while (client.connected() && !client.available() && millis() - timeout < 30000) {
+    while (client.connected() && !client.available() && millis() - timeout < 60000) {
         delay(10);
+        yield();  // Keep watchdog happy
     }
     
     if (!client.available()) {
-        strcpy(lastError, "No response");
+        strcpy(lastError, "Response timeout");
         client.stop();
         return false;
     }
@@ -278,8 +310,15 @@ bool WiGLE::uploadFile(const char* csvPath) {
         if (line == "\r" || line.isEmpty()) break;
     }
     
-    // Read body (JSON response) - use readString for efficiency
-    String body = client.readString();
+    // Read body (JSON response) - limit to 2KB to prevent memory issues on error pages
+    String body;
+    body.reserve(512);  // Pre-allocate typical response size
+    size_t bodyBytesRead = 0;
+    while (client.available() && bodyBytesRead < 2048) {
+        char c = client.read();
+        body += c;
+        bodyBytesRead++;
+    }
     client.stop();
     
     Serial.printf("[WIGLE] Body: %s\n", body.c_str());

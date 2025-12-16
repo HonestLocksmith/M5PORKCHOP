@@ -225,8 +225,9 @@ void AchievementsMenu::drawDetail(M5Canvas& canvas) {
     bool hasIt = (XP::getAchievements() & ACHIEVEMENTS[selectedIndex].flag) != 0;
     
     // Toast style: pink filled box with black text
-    int boxW = 200;
-    int boxH = 70;
+    // Taller box to accommodate word-wrapped description
+    int boxW = 210;
+    int boxH = 80;
     int boxX = (canvas.width() - boxW) / 2;
     int boxY = (canvas.height() - boxH) / 2;
     
@@ -240,13 +241,37 @@ void AchievementsMenu::drawDetail(M5Canvas& canvas) {
     canvas.setTextDatum(top_center);
     
     // Achievement name (show UNKNOWN if locked)
-    canvas.drawString(hasIt ? ACHIEVEMENTS[selectedIndex].name : "UNKNOWN", canvas.width() / 2, boxY + 10);
+    canvas.drawString(hasIt ? ACHIEVEMENTS[selectedIndex].name : "UNKNOWN", canvas.width() / 2, boxY + 8);
     
     // Status
-    canvas.drawString(hasIt ? "UNLOCKED" : "LOCKED", canvas.width() / 2, boxY + 26);
+    canvas.drawString(hasIt ? "UNLOCKED" : "LOCKED", canvas.width() / 2, boxY + 22);
     
-    // How to get it (show ??? if locked)
-    canvas.drawString(hasIt ? ACHIEVEMENTS[selectedIndex].howTo : "???", canvas.width() / 2, boxY + 46);
+    // How to get it - with word wrap for long descriptions
+    const char* howTo = hasIt ? ACHIEVEMENTS[selectedIndex].howTo : "???";
+    String desc = String(howTo);
+    int maxCharsPerLine = 28;  // Fits ~200px text area
+    int lineHeight = 12;
+    int textY = boxY + 40;
+    int centerX = canvas.width() / 2;
+    
+    // Word wrap: split into lines
+    int lineNum = 0;
+    while (desc.length() > 0 && lineNum < 3) {
+        String line;
+        if ((int)desc.length() <= maxCharsPerLine) {
+            line = desc;
+            desc = "";
+        } else {
+            int splitPos = desc.lastIndexOf(' ', maxCharsPerLine);
+            if (splitPos < 1) {
+                splitPos = maxCharsPerLine;  // Hard break
+            }
+            line = desc.substring(0, splitPos);
+            desc = desc.substring(splitPos + 1);
+        }
+        canvas.drawString(line, centerX, textY + lineNum * lineHeight);
+        lineNum++;
+    }
     
     // Reset text datum
     canvas.setTextDatum(top_left);
@@ -257,7 +282,12 @@ void AchievementsMenu::updateBottomOverlay() {
     bool hasIt = (unlocked & ACHIEVEMENTS[selectedIndex].flag) != 0;
     
     if (hasIt) {
-        Display::setBottomOverlay(ACHIEVEMENTS[selectedIndex].howTo);
+        String text = ACHIEVEMENTS[selectedIndex].howTo;
+        // Truncate to fit 240px bottom bar (~36 chars)
+        if (text.length() > 36) {
+            text = text.substring(0, 33) + "...";
+        }
+        Display::setBottomOverlay(text);
     } else {
         Display::setBottomOverlay("UNKNOWN");
     }

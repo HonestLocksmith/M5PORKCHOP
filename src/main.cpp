@@ -1,6 +1,6 @@
 // Porkchop - ML-Enhanced Piglet Security Companion
 // Main entry point
-// Author: 0ct0sec
+// Author: 0ct0
 
 #include <M5Cardputer.h>
 #include <M5Unified.h>

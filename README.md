@@ -1023,7 +1023,7 @@
 
 --[ 12 - Credits
 
-    Developed by: 0cto0
+    Developed by: 0ct0
     Team size: 1
     Pronoun of choice: "we"
 

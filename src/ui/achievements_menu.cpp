@@ -83,6 +83,10 @@ static const struct {
     // Combined DO NO HAM + BOAR BROS achievements
     { ACH_INNER_PEACE,    "1NN3R P34C3",    "1hr passive + 10 bros + no deauths" },
     { ACH_PACIFIST_RUN,   "P4C1F1ST RUN",   "50+ networks, all added as bros" },
+    // CLIENT MONITOR achievements (v0.1.6+)
+    { ACH_QUICK_DRAW,     "QU1CK DR4W",     "Deauth 5 clients in 30 seconds" },
+    { ACH_DEAD_EYE,       "D34D 3Y3",       "Deauth <2s after entering monitor" },
+    { ACH_HIGH_NOON,      "H1GH N00N",      "Deauth during noon hour" },
 };
 
 void AchievementsMenu::init() {

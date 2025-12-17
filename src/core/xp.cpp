@@ -182,7 +182,11 @@ static const char* ACHIEVEMENT_NAMES[] = {
     "FULL R0ST3R",        // 100 bros (max)
     // Combined achievements (bits 58-59)
     "1NN3R P34C3",        // 1hr passive + 10 bros + 0 deauths
-    "P4C1F1ST RUN"        // 50+ nets all as bros
+    "P4C1F1ST RUN",       // 50+ nets all as bros
+    // CLIENT MONITOR achievements (bits 60-62)
+    "QU1CK DR4W",         // 5 clients in 30 seconds
+    "D34D 3Y3",           // Deauth within 2 seconds of entering
+    "H1GH N00N"           // Deauth during noon hour
 };
 static const uint8_t ACHIEVEMENT_COUNT = sizeof(ACHIEVEMENT_NAMES) / sizeof(ACHIEVEMENT_NAMES[0]);
 

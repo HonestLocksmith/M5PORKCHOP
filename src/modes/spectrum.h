@@ -90,6 +90,11 @@ private:
     static uint8_t clientsDiscoveredThisSession;  // For limiting beeps
     static volatile bool pendingClientBeep;       // Deferred beep for new client
     
+    // Achievement tracking for client monitor (v0.1.6)
+    static uint32_t clientMonitorEntryTime;  // When we entered client monitor
+    static uint8_t deauthsThisMonitor;       // Deauths since entering monitor
+    static uint32_t firstDeauthTime;         // Time of first deauth (for QUICK_DRAW)
+    
     static void handleInput();
     static void handleClientMonitorInput();  // Input when monitoring
     static void drawSpectrum(M5Canvas& canvas);

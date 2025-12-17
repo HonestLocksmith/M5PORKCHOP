@@ -1518,12 +1518,17 @@ ACH_FULL_ROSTER     = 1ULL << 57  // 100 bros (max limit)
 // Combined DO NO HAM + BOAR BROS achievements (bits 58-59)
 ACH_INNER_PEACE     = 1ULL << 58  // 1hr passive + 10 bros + 0 deauths this session
 ACH_PACIFIST_RUN    = 1ULL << 59  // 50+ networks discovered, all added to bros
+
+// CLIENT MONITOR achievements (bits 60-62) - v0.1.6 hunting features
+ACH_QUICK_DRAW      = 1ULL << 60  // Deauth 5 clients in under 30 seconds
+ACH_DEAD_EYE        = 1ULL << 61  // Deauth within 2 seconds of entering monitor
+ACH_HIGH_NOON       = 1ULL << 62  // Deauth during 12:00 hour (noon)
 ```
 
 ### Achievements Menu
 `src/ui/achievements_menu.cpp/h` - Accessible from main menu ("ACHIEVEMENTS").
 
-- Shows all 60 achievements with `[X]` unlocked / `[ ]` locked
+- Shows all 63 achievements with `[X]` unlocked / `[ ]` locked
 - Locked achievements show `???` for name (no spoilers)
 - Bottom bar shows unlock description for selected achievement, or "UNKNOWN" if locked
 - Enter key shows toast-style detail popup (pink bg, black text)

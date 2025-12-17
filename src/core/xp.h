@@ -140,6 +140,11 @@ enum PorkAchievement : uint64_t {
     // Combined DO NO HAM + BOAR BROS achievements (bits 58-59)
     ACH_INNER_PEACE     = 1ULL << 58,  // 1hr passive + 10 bros + 0 deauths this session
     ACH_PACIFIST_RUN    = 1ULL << 59,  // 50+ networks discovered, all added to bros
+    
+    // CLIENT MONITOR achievements (bits 60-62) - v0.1.6 hunting features
+    ACH_QUICK_DRAW      = 1ULL << 60,  // Deauth 5 clients in under 30 seconds
+    ACH_DEAD_EYE        = 1ULL << 61,  // Deauth within 2 seconds of entering monitor
+    ACH_HIGH_NOON       = 1ULL << 62,  // Deauth during 12:00 hour (noon)
 };
 
 // Persistent XP data structure (stored in NVS)

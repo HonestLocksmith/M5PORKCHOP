@@ -65,6 +65,11 @@ uint32_t SpectrumMode::lastClientPrune = 0;
 uint8_t SpectrumMode::clientsDiscoveredThisSession = 0;
 volatile bool SpectrumMode::pendingClientBeep = false;
 
+// Achievement tracking for client monitor (v0.1.6)
+uint32_t SpectrumMode::clientMonitorEntryTime = 0;
+uint8_t SpectrumMode::deauthsThisMonitor = 0;
+uint32_t SpectrumMode::firstDeauthTime = 0;
+
 void SpectrumMode::init() {
     networks.clear();
     viewCenterMHz = DEFAULT_CENTER_MHZ;
@@ -1071,6 +1076,11 @@ void SpectrumMode::enterClientMonitor() {
     clientsDiscoveredThisSession = 0;  // Reset beep counter
     pendingClientBeep = false;         // Clear any pending beep
     
+    // Reset achievement tracking (v0.1.6)
+    clientMonitorEntryTime = millis();
+    deauthsThisMonitor = 0;
+    firstDeauthTime = 0;
+    
     // Lock channel
     esp_wifi_set_channel(monitoredChannel, WIFI_SECOND_CHAN_NONE);
     
@@ -1213,4 +1223,36 @@ void SpectrumMode::deauthClient(int idx) {
         client.mac[4], client.mac[5], sent);
     Display::showToast(msg);
     delay(300);  // Brief feedback
+    
+    // === ACHIEVEMENT CHECKS (v0.1.6) ===
+    uint32_t now = millis();
+    
+    // DEAD_EYE: Deauth within 2 seconds of entering monitor
+    if (clientMonitorEntryTime > 0 && (now - clientMonitorEntryTime) < 2000) {
+        if (!XP::hasAchievement(ACH_DEAD_EYE)) {
+            XP::unlockAchievement(ACH_DEAD_EYE);
+        }
+    }
+    
+    // HIGH_NOON: Deauth during noon hour (12:00-12:59)
+    time_t nowTime = time(nullptr);
+    if (nowTime > 1700000000) {  // Valid time (after 2023)
+        struct tm* timeinfo = localtime(&nowTime);
+        if (timeinfo && timeinfo->tm_hour == 12) {
+            if (!XP::hasAchievement(ACH_HIGH_NOON)) {
+                XP::unlockAchievement(ACH_HIGH_NOON);
+            }
+        }
+    }
+    
+    // QUICK_DRAW: Deauth 5 clients in under 30 seconds
+    deauthsThisMonitor++;
+    if (deauthsThisMonitor == 1) {
+        firstDeauthTime = now;  // Start the timer on first deauth
+    }
+    if (deauthsThisMonitor >= 5 && (now - firstDeauthTime) < 30000) {
+        if (!XP::hasAchievement(ACH_QUICK_DRAW)) {
+            XP::unlockAchievement(ACH_QUICK_DRAW);
+        }
+    }
 }

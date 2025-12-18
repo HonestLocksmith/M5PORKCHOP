@@ -305,6 +305,7 @@ void CapturesMenu::draw(M5Canvas& canvas) {
         canvas.setCursor(4, y);
         String displaySSID = cap.isPMKID ? "[P]" : "";
         displaySSID += cap.ssid;
+        displaySSID.toUpperCase();
         if (displaySSID.length() > 10) {
             displaySSID = displaySSID.substring(0, 8) + "..";
         }
@@ -452,10 +453,11 @@ void CapturesMenu::drawDetailView(M5Canvas& canvas) {
     
     // SSID
     String ssidLine = cap.ssid;
-    if (ssidLine.length() > 24) ssidLine = ssidLine.substring(0, 22) + "..";
+    ssidLine.toUpperCase();
+    if (ssidLine.length() > 16) ssidLine = ssidLine.substring(0, 14) + "..";
     canvas.drawString(ssidLine, centerX, boxY + 6);
     
-    // BSSID
+    // BSSID (already uppercase from storage)
     canvas.drawString(cap.bssid, centerX, boxY + 20);
     
     // Status and password

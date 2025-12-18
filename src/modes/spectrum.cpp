@@ -457,11 +457,13 @@ void SpectrumMode::drawClientOverlay(M5Canvas& canvas) {
     // Header: SSID or <hidden> [P15]
     char header[40];
     if (net.ssid[0] == 0) {
-        snprintf(header, sizeof(header), "CLIENTS: <hidden> CH%d", net.channel);
+        snprintf(header, sizeof(header), "CLIENTS: <HIDDEN> CH%d", net.channel);
     } else {
         char truncSSID[16];
         strncpy(truncSSID, net.ssid, 15);
         truncSSID[15] = '\0';  // [P9] Explicit null termination
+        // Uppercase for readability
+        for (int i = 0; truncSSID[i]; i++) truncSSID[i] = toupper(truncSSID[i]);
         snprintf(header, sizeof(header), "CLIENTS: %s CH%d", truncSSID, net.channel);
     }
     canvas.setTextDatum(top_left);

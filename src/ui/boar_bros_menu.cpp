@@ -239,8 +239,10 @@ void BoarBrosMenu::draw(M5Canvas& canvas) {
         // SSID or "NONAME BRO" for hidden networks
         canvas.setCursor(4, y);
         String displayName = bro.ssid.length() > 0 ? bro.ssid : "NONAME BRO";
-        if (displayName.length() > 12) {
-            displayName = displayName.substring(0, 10) + "..";
+        displayName.toUpperCase();
+        if (displayName.length() > 14) {
+            displayName = displayName.substring(0, 12) + "..";
+// 
         }
         canvas.print(displayName);
         
@@ -288,6 +290,7 @@ void BoarBrosMenu::drawDeleteConfirm(M5Canvas& canvas) {
     
     String broName = bros[selectedIndex].ssid.length() > 0 ? 
                      bros[selectedIndex].ssid : bros[selectedIndex].bssidStr;
+    broName.toUpperCase();
     if (broName.length() > 18) broName = broName.substring(0, 16) + "..";
     canvas.drawString(broName, boxX + boxW / 2, boxY + 24);
     

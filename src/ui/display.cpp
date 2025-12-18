@@ -294,7 +294,9 @@ void Display::drawTopBar() {
     
     // Append PWNED banner if active (only in OINK mode, persists until reboot)
     if (mode == PorkchopMode::OINK_MODE && lootSSID.length() > 0) {
-        modeStr += " PWNED " + lootSSID;
+        String upperLoot = lootSSID;
+        upperLoot.toUpperCase();
+        modeStr += " PWNED " + upperLoot;
     }
     
     topBar.setTextColor(modeColor);
@@ -422,6 +424,8 @@ void Display::drawBottomBar() {
                 char ssidShort[13];
                 strncpy(ssidShort, targetSSID, 12);
                 ssidShort[12] = '\0';
+                // Uppercase for readability
+                for (int i = 0; ssidShort[i]; i++) ssidShort[i] = toupper(ssidShort[i]);
                 snprintf(buf, sizeof(buf), "LOCK:%s C:%d CH:%d", ssidShort, clients, channel);
             }
         } else if (passive) {
@@ -811,7 +815,8 @@ void Display::drawModeInfo(M5Canvas& canvas, PorkchopMode mode) {
         if (target) {
             canvas.setTextColor(COLOR_SUCCESS);
             String ssid = String(target->ssid);
-            if (ssid.length() == 0) ssid = "<hidden>";
+            if (ssid.length() == 0) ssid = "<HIDDEN>";
+            ssid.toUpperCase();
             canvas.drawString("ATTACKING:", 2, 2);
             canvas.setTextColor(COLOR_ACCENT);
             canvas.drawString(ssid.substring(0, 16), 2, 14);

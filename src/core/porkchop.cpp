@@ -338,12 +338,15 @@ void Porkchop::handleInput() {
     
     // Menu toggle with backtick - context-sensitive "back one level"
     if (M5Cardputer.Keyboard.isKeyPressed('`')) {
+        // SPECTRUM mode monitoring: let spectrum.cpp handle the key
+        if (currentMode == PorkchopMode::SPECTRUM_MODE && SpectrumMode::isMonitoring()) {
+            return;  // Don't intercept - spectrum.cpp will exit client monitor
+        }
         // In active modes: go to IDLE
-        // BUT: if SPECTRUM mode is monitoring a network, let it handle the key
         if (currentMode == PorkchopMode::OINK_MODE ||
             currentMode == PorkchopMode::WARHOG_MODE ||
             currentMode == PorkchopMode::PIGGYBLUES_MODE ||
-            (currentMode == PorkchopMode::SPECTRUM_MODE && !SpectrumMode::isMonitoring())) {
+            currentMode == PorkchopMode::SPECTRUM_MODE) {
             setMode(PorkchopMode::IDLE);
             return;
         }

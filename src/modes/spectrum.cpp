@@ -493,8 +493,8 @@ void SpectrumMode::drawClientOverlay(M5Canvas& canvas) {
     // Empty list message [P14]
     if (net.clientCount == 0) {
         canvas.setTextDatum(middle_center);
-        canvas.drawString("NO CLIENTS DETECTED", 120, 40);
-        canvas.drawString("WAITING FOR DATA FRAMES...", 120, 55);
+        canvas.drawString("NEGATIVE CONTACT", 120, 40);
+        canvas.drawString("RECON IN PROGRESS...", 120, 55);
         return;
     }
     

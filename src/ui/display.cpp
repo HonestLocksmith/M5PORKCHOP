@@ -361,17 +361,17 @@ void Display::drawBottomBar() {
         if (GPS::hasFix()) {
             // Format distance nicely: meters or km
             if (distM >= 1000) {
-                // Show as km with 1 decimal: "1.2km"
-                snprintf(buf, sizeof(buf), "U:%lu S:%lu D:%.1fkm [%.2f,%.2f]", 
+                // Show as km with 1 decimal: "1.2KM"
+                snprintf(buf, sizeof(buf), "U:%03lu S:%03lu D:%.1fKM [%.2f,%.2f]", 
                          unique, saved, distM / 1000.0, gps.latitude, gps.longitude);
             } else {
-                // Show as meters: "456m"
-                snprintf(buf, sizeof(buf), "U:%lu S:%lu D:%lum [%.2f,%.2f]", 
+                // Show as meters: "456M"
+                snprintf(buf, sizeof(buf), "U:%03lu S:%03lu D:%luM [%.2f,%.2f]", 
                          unique, saved, distM, gps.latitude, gps.longitude);
             }
         } else {
             // No fix - show satellite count
-            snprintf(buf, sizeof(buf), "U:%lu S:%lu D:%lum GPS:%dsat", 
+            snprintf(buf, sizeof(buf), "U:%03lu S:%03lu D:%luM GPS:%02dSAT", 
                      unique, saved, distM, gps.satellites);
         }
         stats = String(buf);
@@ -823,7 +823,7 @@ void Display::drawModeInfo(M5Canvas& canvas, PorkchopMode mode) {
             canvas.drawString(ssid.substring(0, 16), 2, 14);
             
             char info[32];
-            snprintf(info, sizeof(info), "CH%d %ddB", target->channel, target->rssi);
+            snprintf(info, sizeof(info), "CH:%02d %ddB", target->channel, target->rssi);
             canvas.setTextColor(COLOR_FG);
             canvas.drawString(info, 2, 26);
         } else if (!networks.empty()) {

@@ -478,14 +478,14 @@ void SpectrumMode::drawClientOverlay(M5Canvas& canvas) {
     // Header: SSID or <hidden> [P15]
     char header[40];
     if (net.ssid[0] == 0) {
-        snprintf(header, sizeof(header), "CLIENTS: <HIDDEN> CH%d", net.channel);
+        snprintf(header, sizeof(header), "CLIENTS: <HIDDEN> CH:%02d", net.channel);
     } else {
         char truncSSID[16];
         strncpy(truncSSID, net.ssid, 15);
         truncSSID[15] = '\0';  // [P9] Explicit null termination
         // Uppercase for readability
         for (int i = 0; truncSSID[i]; i++) truncSSID[i] = toupper(truncSSID[i]);
-        snprintf(header, sizeof(header), "CLIENTS: %s CH%d", truncSSID, net.channel);
+        snprintf(header, sizeof(header), "CLIENTS: %s CH:%02d", truncSSID, net.channel);
     }
     canvas.setTextDatum(top_left);
     canvas.drawString(header, 4, 2);
@@ -544,7 +544,7 @@ void SpectrumMode::drawClientOverlay(M5Canvas& canvas) {
         
         // [P9] Safe string formatting with bounds
         // Show vendor (8 chars) + last 2 octets + arrow for hunting
-        snprintf(line, sizeof(line), "%d.%-8s %02X:%02X %3ddB %2lus %s",
+        snprintf(line, sizeof(line), "%d.%-8s %02X:%02X %03ddB %02luS %s",
             clientIdx + 1,
             vendorUpper,
             client.mac[4], client.mac[5],
@@ -788,9 +788,10 @@ String SpectrumMode::getSelectedInfo() {
         if (monitoredNetworkIndex >= 0 && monitoredNetworkIndex < (int)networks.size()) {
             const auto& net = networks[monitoredNetworkIndex];
             char buf[48];
-            const char* ssid = net.ssid[0] ? net.ssid : "[HIDDEN]";
-            snprintf(buf, sizeof(buf), "MON:%s C:%d CH%d", 
-                     ssid, net.clientCount, net.channel);
+            String ssidStr = net.ssid[0] ? net.ssid : "[HIDDEN]";
+            ssidStr.toUpperCase();
+            snprintf(buf, sizeof(buf), "MON:%s C:%02d CH:%02d", 
+                     ssidStr.c_str(), net.clientCount, net.channel);
             return String(buf);
         }
         return "MONITORING...";
@@ -810,12 +811,13 @@ String SpectrumMode::getSelectedInfo() {
         } else {
             ssid = "[HIDDEN]";
         }
+        ssid.toUpperCase();
         if (ssid.length() > MAX_SSID_DISPLAY) {
             ssid = ssid.substring(0, MAX_SSID_DISPLAY) + "..";
         }
         
         char buf[64];
-        snprintf(buf, sizeof(buf), "%s %ddB ch%d %s", 
+        snprintf(buf, sizeof(buf), "%s %ddB CH:%02d %s", 
                  ssid.c_str(), 
                  net.rssi, net.channel,
                  authModeToShortString(net.authmode));

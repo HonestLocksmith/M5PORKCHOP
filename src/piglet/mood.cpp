@@ -268,7 +268,10 @@ const char* PHRASES_HAPPY[] = {
     "hog on a roll",
     "mud life best life",
     "truffle shuffle",
-    "chaos tastes good"
+    "chaos tastes good",
+    "horse is sober today",
+    "barn looks good",
+    "optometrist helped"
 };
 
 const char* PHRASES_EXCITED[] = {
@@ -277,7 +280,9 @@ const char* PHRASES_EXCITED[] = {
     "truffle in the bag",
     "gg no re",
     "snout goes brrrr",
-    "0day buffet"
+    "0day buffet",
+    "HORSE IS BACK",
+    "BARN PARTY TIME"
 };
 
 const char* PHRASES_HUNTING[] = {
@@ -311,7 +316,9 @@ const char* PHRASES_SLEEPY[] = {
     "no truffles here",
     "/dev/null",
     "zzz oink zzz",
-    "sleepy piggy"
+    "sleepy piggy",
+    "horse sleeping it off",
+    "barn quiet tonight"
 };
 
 const char* PHRASES_SAD[] = {
@@ -320,7 +327,11 @@ const char* PHRASES_SAD[] = {
     "lost n confused",
     "empty trough",
     "sad lil piggy",
-    "need dem truffles"
+    "need dem truffles",
+    "horse left again",
+    "barn empty now",
+    "horse on that k again",
+    "optometrist gone"
 };
 
 // BORED phrases - pig has nothing to hack
@@ -336,7 +347,9 @@ const char* PHRASES_BORED[] = {
     "0 targets found",
     "radio silence",
     "tumbleweed.exe",
-    "802.11 wasteland"
+    "802.11 wasteland",
+    "where horse at",
+    "barn too quiet"
 };
 
 // WARHOG wardriving phrases - GPS recon style
@@ -442,7 +455,14 @@ const char* PHRASES_RARE[] = {
     "802.11 mudslinger",
     "wardriving wizard",
     "never trust a pig",
-    "pwn responsibly"
+    "pwn responsibly",
+    "horse ok today?",
+    "horse found the k",
+    "barn still standing?",
+    "horse vibin hard",
+    "miss u horse",
+    "horse WAS the barn",
+    "check on da horse"
 };
 
 void Mood::init() {

@@ -448,7 +448,7 @@ void Display::drawBottomBar() {
         uint16_t hsCount = DoNoHamMode::getHandshakeCount();
         uint8_t channel = DoNoHamMode::getCurrentChannel();
         char buf[48];
-        snprintf(buf, sizeof(buf), "N:%03d P:%02d HS:%02d CH:%02d DNH", netCount, pmkidCount, hsCount, channel);
+        snprintf(buf, sizeof(buf), "N:%03d P:%02d HS:%02d CH:%02d", netCount, pmkidCount, hsCount, channel);
         stats = String(buf);
     } else if (mode == PorkchopMode::PIGGYBLUES_MODE) {
         // PIGGYBLUES: TX:total A:apple G:android S:samsung W:windows

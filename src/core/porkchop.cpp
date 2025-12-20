@@ -76,7 +76,7 @@ void Porkchop::init() {
     std::vector<MenuItem> mainMenuItems = {
         // === MODES ===
         {"OINK", 1, "HUNT FOR HANDSHAKES"},
-        {"DO NO HAM", 14, "PASSIVE RECON (NO ATTACKS)"},
+        {"DONOHAM", 14, "PASSIVE RECON (NO ATTACKS)"},
         {"WARHOG", 2, "WARDRIVE WITH GPS"},
         {"PIGGY BLUES", 8, "BLE NOTIFICATION SPAM"},
         {"HOG ON SPECTRUM", 10, "WIFI SPECTRUM ANALYZER"},

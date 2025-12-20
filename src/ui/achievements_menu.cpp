@@ -253,6 +253,7 @@ void AchievementsMenu::drawDetail(M5Canvas& canvas) {
     // How to get it - with word wrap for long descriptions
     const char* howTo = hasIt ? ACHIEVEMENTS[selectedIndex].howTo : "???";
     String desc = String(howTo);
+    desc.toUpperCase();  // PIG SCREAMS
     int maxCharsPerLine = 28;  // Fits ~200px text area
     int lineHeight = 12;
     int textY = boxY + 40;
@@ -287,6 +288,7 @@ void AchievementsMenu::updateBottomOverlay() {
     
     if (hasIt) {
         String text = ACHIEVEMENTS[selectedIndex].howTo;
+        text.toUpperCase();  // PIG SCREAMS
         // Truncate to fit 240px bottom bar (~36 chars)
         if (text.length() > 36) {
             text = text.substring(0, 33) + "...";

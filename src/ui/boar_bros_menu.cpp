@@ -215,11 +215,11 @@ void BoarBrosMenu::draw(M5Canvas& canvas) {
     
     if (bros.empty()) {
         canvas.setCursor(4, 35);
-        canvas.print("No BOAR BROS yet!");
+        canvas.print("NO BOAR BROS YET!");
         canvas.setCursor(4, 50);
-        canvas.print("Press [B] in OINK mode");
+        canvas.print("PRESS [B] IN OINK MODE");
         canvas.setCursor(4, 65);
-        canvas.print("to exclude a network.");
+        canvas.print("TO EXCLUDE A NETWORK.");
         return;
     }
     

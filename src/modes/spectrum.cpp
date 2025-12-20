@@ -788,10 +788,9 @@ String SpectrumMode::getSelectedInfo() {
         if (monitoredNetworkIndex >= 0 && monitoredNetworkIndex < (int)networks.size()) {
             const auto& net = networks[monitoredNetworkIndex];
             char buf[48];
-            String ssidStr = net.ssid[0] ? net.ssid : "[HIDDEN]";
-            ssidStr.toUpperCase();
+            // Use getMonitoredSSID() - already truncates to 11 chars for bottom bar
             snprintf(buf, sizeof(buf), "MON:%s C:%02d CH:%02d", 
-                     ssidStr.c_str(), net.clientCount, net.channel);
+                     getMonitoredSSID().c_str(), net.clientCount, net.channel);
             return String(buf);
         }
         return "MONITORING...";

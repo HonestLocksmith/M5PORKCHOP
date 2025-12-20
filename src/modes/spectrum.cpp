@@ -1252,7 +1252,7 @@ void SpectrumMode::deauthClient(int idx) {
     
     // Feedback beep (low thump)
     if (Config::personality().soundEnabled) {
-        M5Cardputer.Speaker.tone(600, 80);
+        M5.Speaker.tone(600, 80);
     }
     
     // Short toast with client MAC suffix

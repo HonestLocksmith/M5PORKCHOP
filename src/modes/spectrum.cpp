@@ -475,17 +475,17 @@ void SpectrumMode::drawClientOverlay(M5Canvas& canvas) {
     
     SpectrumNetwork& net = networks[monitoredNetworkIndex];
     
-    // Header: SSID or <hidden> [P15]
+    // Header: SSID or <hidden> [P15] - CH removed (shown in bottom bar)
     char header[40];
     if (net.ssid[0] == 0) {
-        snprintf(header, sizeof(header), "CLIENTS: <HIDDEN> CH:%02d", net.channel);
+        snprintf(header, sizeof(header), "CLIENTS: <HIDDEN>");
     } else {
-        char truncSSID[16];
-        strncpy(truncSSID, net.ssid, 15);
-        truncSSID[15] = '\0';  // [P9] Explicit null termination
+        char truncSSID[24];
+        strncpy(truncSSID, net.ssid, 22);
+        truncSSID[22] = '\0';  // [P9] Explicit null termination
         // Uppercase for readability
         for (int i = 0; truncSSID[i]; i++) truncSSID[i] = toupper(truncSSID[i]);
-        snprintf(header, sizeof(header), "CLIENTS: %s CH:%02d", truncSSID, net.channel);
+        snprintf(header, sizeof(header), "CLIENTS: %s", truncSSID);
     }
     canvas.setTextDatum(top_left);
     canvas.drawString(header, 4, 2);
@@ -543,11 +543,11 @@ void SpectrumMode::drawClientOverlay(M5Canvas& canvas) {
         else arrow = "==";                  // Same distance
         
         // [P9] Safe string formatting with bounds
-        // Show vendor (8 chars) + last 2 octets + arrow for hunting
-        snprintf(line, sizeof(line), "%d.%-8s %02X:%02X %03ddB %02luS %s",
+        // Show vendor (8 chars) + last 4 octets + arrow for hunting
+        snprintf(line, sizeof(line), "%d.%-8s %02X:%02X:%02X:%02X %03ddB %02luS %s",
             clientIdx + 1,
             vendorUpper,
-            client.mac[4], client.mac[5],
+            client.mac[2], client.mac[3], client.mac[4], client.mac[5],
             client.rssi,
             age,
             arrow);

@@ -263,9 +263,9 @@ String WigleMenu::getSelectedInfo() {
         return "D0PAM1N3 SH0P: [U] [R] [D]";
     }
     const WigleFileInfo& file = files[selectedIndex];
-    // Show: ~Xnets Xkb [OK]/[--]
+    // Show: ~XNETS XKB [OK]/[--]
     String status = (file.status == WigleFileStatus::UPLOADED) ? "[OK]" : "[--]";
-    return "~" + String(file.networkCount) + "nets " + formatSize(file.fileSize) + " " + status;
+    return "~" + String(file.networkCount) + "NETS " + formatSize(file.fileSize) + " " + status;
 }
 
 void WigleMenu::update() {
@@ -306,15 +306,7 @@ void WigleMenu::draw(M5Canvas& canvas) {
             canvas.setTextColor(COLOR_FG);
         }
         
-        // Status indicator
-        canvas.setCursor(4, y);
-        if (file.status == WigleFileStatus::UPLOADED) {
-            canvas.print("[OK]");
-        } else {
-            canvas.print("[--]");
-        }
-        
-        // Filename (truncated) - extract just the date/time part
+        // Filename first (truncated) - extract just the date/time part
         String displayName = file.filename;
         // Remove "warhog_" prefix and ".wigle.csv" suffix for cleaner display
         if (displayName.startsWith("warhog_")) {
@@ -326,8 +318,16 @@ void WigleMenu::draw(M5Canvas& canvas) {
         if (displayName.length() > 15) {
             displayName = displayName.substring(0, 13) + "..";
         }
-        canvas.setCursor(35, y);
+        canvas.setCursor(4, y);
         canvas.print(displayName);
+        
+        // Status indicator (second column, matches LOOT menu)
+        canvas.setCursor(105, y);
+        if (file.status == WigleFileStatus::UPLOADED) {
+            canvas.print("[OK]");
+        } else {
+            canvas.print("[--]");
+        }
         
         // Network count and size
         canvas.setCursor(140, y);

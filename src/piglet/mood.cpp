@@ -134,17 +134,17 @@ static bool processQueue() {
 // Templates with $VAR tokens replaced with live data
 
 const char* PHRASES_DYNAMIC[] = {
-    "$NET truffles clocked innit",
-    "$HS blessed realness captured",
-    "lvl $LVL boots on progression sir",
-    "$DEAUTH eleganza violence",
-    "$NET irie contacts logged",
-    "rank $LVL snatched mate",
-    "$HS tactical blessings",
-    "$KM km death dropped on foot",
-    "$NET networks serving sir",
-    "bacon lvl $LVL blessed innit",
-    "$DEAUTH proper frames hunty"
+    "$NET networks. should crash. doesnt.",
+    "$HS handshakes. found nothing wrong.",
+    "lvl $LVL. pig judges progress.",
+    "$DEAUTH deauths. probably fine.",
+    "$NET collected. commit history agrees.",
+    "rank $LVL. barn says ok.",
+    "$HS captured. horse concerned.",
+    "$KM km. GPS lied maybe.",
+    "$NET sniffed. pig suspicious.",
+    "bacon lvl $LVL. no soup today.",
+    "$DEAUTH kicked. clients confused."
 };
 
 static const int PHRASES_DYNAMIC_COUNT = sizeof(PHRASES_DYNAMIC) / sizeof(PHRASES_DYNAMIC[0]);

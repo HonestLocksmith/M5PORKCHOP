@@ -703,7 +703,8 @@ void DoNoHamMode::saveAllPMKIDs() {
         
         char essidHex[65];
         int ssidLen = strlen(p.ssid);
-        for (int i = 0; i < ssidLen && i < 32; i++) {
+        if (ssidLen > 32) ssidLen = 32;  // Cap to max SSID length
+        for (int i = 0; i < ssidLen; i++) {
             sprintf(essidHex + i*2, "%02x", (uint8_t)p.ssid[i]);
         }
         essidHex[ssidLen * 2] = 0;
@@ -822,10 +823,11 @@ void DoNoHamMode::saveAllHandshakes() {
             hs.station[0], hs.station[1], hs.station[2],
             hs.station[3], hs.station[4], hs.station[5]);
         
-        // ESSID (hex-encoded)
+        // ESSID (hex-encoded, max 32 chars = 64 hex + null)
         char essidHex[65];
         int ssidLen = strlen(hs.ssid);
-        for (int i = 0; i < ssidLen && i < 32; i++) {
+        if (ssidLen > 32) ssidLen = 32;  // Cap to max SSID length
+        for (int i = 0; i < ssidLen; i++) {
             sprintf(essidHex + i*2, "%02x", (uint8_t)hs.ssid[i]);
         }
         essidHex[ssidLen * 2] = 0;

@@ -630,6 +630,11 @@ void OinkMode::update() {
                     bool foundTarget = false;
                     for (int attempts = 0; attempts < (int)networks.size() && !foundTarget; attempts++) {
                         pmkidTargetIndex = (pmkidTargetIndex + 1) % networks.size();
+                        // Validate index after modulo (cleanup could have shrunk vector)
+                        if (pmkidTargetIndex >= (int)networks.size()) {
+                            pmkidTargetIndex = 0;
+                            if (networks.empty()) break;  // No networks left
+                        }
                         DetectedNetwork& net = networks[pmkidTargetIndex];
                         
                         // Skip: Open, WEP, BOAR BRO, PMF, or already have PMKID

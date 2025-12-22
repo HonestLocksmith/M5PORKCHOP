@@ -55,9 +55,9 @@ static char pendingPMKIDSSID[33] = {0};
 struct PendingHandshakeCreate {
     uint8_t bssid[6];
     uint8_t station[6];
-    uint8_t messageNum;        // Which EAPOL message triggered this
-    uint8_t eapolData[512];    // Copy of EAPOL frame (matches EAPOLFrame.data size)
-    uint16_t eapolLen;
+    uint8_t messageNum;        // DEPRECATED - used only for logging now
+    EAPOLFrame frames[4];      // Store all 4 EAPOL frames (M1-M4)
+    uint8_t capturedMask;      // Bitmask: bit0=M1, bit1=M2, bit2=M3, bit3=M4
     uint8_t pmkid[16];         // If M1, may contain PMKID
     bool hasPMKID;
 };
@@ -456,39 +456,44 @@ void OinkMode::update() {
         int idx = findOrCreateHandshakeSafe(pendingHandshakeCreate.bssid, pendingHandshakeCreate.station);
         if (idx >= 0) {
             CapturedHandshake& hs = handshakes[idx];
-            uint8_t msgNum = pendingHandshakeCreate.messageNum;
             
-            // Store the EAPOL frame (data is fixed array, check len==0 for "empty")
-            if (msgNum >= 1 && msgNum <= 4 && pendingHandshakeCreate.eapolLen > 0) {
-                int msgIdx = msgNum - 1;
-                if (hs.frames[msgIdx].len == 0) {  // Not already captured
-                    uint16_t copyLen = min((uint16_t)512, pendingHandshakeCreate.eapolLen);
-                    memcpy(hs.frames[msgIdx].data, pendingHandshakeCreate.eapolData, copyLen);
-                    hs.frames[msgIdx].len = copyLen;
-                    hs.frames[msgIdx].messageNum = msgNum;
-                    hs.frames[msgIdx].timestamp = millis();
-                    hs.capturedMask |= (1 << msgIdx);
-                    hs.lastSeen = millis();
-                    
-                    queueLog("[OINK] M%d captured (deferred)", msgNum);
-                    
-                    // Check if handshake is now complete
-                    if (hs.isComplete() && !hs.saved) {
-                        pendingHandshakeComplete = true;
-                        // Get SSID for this BSSID
-                        for (const auto& net : networks) {
-                            if (memcmp(net.bssid, pendingHandshakeCreate.bssid, 6) == 0) {
-                                strncpy(pendingHandshakeSSID, net.ssid, 32);
-                                pendingHandshakeSSID[32] = 0;
-                                strncpy(hs.ssid, net.ssid, 32);
-                                hs.ssid[32] = 0;
-                                break;
-                            }
+            // Process ALL queued frames (M1-M4) from capturedMask
+            for (int msgIdx = 0; msgIdx < 4; msgIdx++) {
+                if (pendingHandshakeCreate.capturedMask & (1 << msgIdx)) {
+                    // Frame is present in the queued data
+                    if (hs.frames[msgIdx].len == 0) {  // Not already captured
+                        uint16_t copyLen = pendingHandshakeCreate.frames[msgIdx].len;
+                        if (copyLen > 0 && copyLen <= 512) {
+                            memcpy(hs.frames[msgIdx].data, pendingHandshakeCreate.frames[msgIdx].data, copyLen);
+                            hs.frames[msgIdx].len = copyLen;
+                            hs.frames[msgIdx].messageNum = msgIdx + 1;
+                            hs.frames[msgIdx].timestamp = millis();
+                            hs.capturedMask |= (1 << msgIdx);
+                            hs.lastSeen = millis();
+                            
+                            queueLog("[OINK] M%d captured (deferred)", msgIdx + 1);
                         }
-                        // Auto-save complete handshake (safe here - main thread context)
-                        autoSaveCheck();
                     }
                 }
+            }
+            
+            // Get SSID for this BSSID
+            for (const auto& net : networks) {
+                if (memcmp(net.bssid, pendingHandshakeCreate.bssid, 6) == 0) {
+                    strncpy(hs.ssid, net.ssid, 32);
+                    hs.ssid[32] = 0;
+                    break;
+                }
+            }
+            
+            // Check if handshake is now complete
+            if (hs.isComplete() && !hs.saved) {
+                pendingHandshakeComplete = true;
+                strncpy(pendingHandshakeSSID, hs.ssid, 32);
+                pendingHandshakeSSID[32] = 0;
+                
+                // Auto-save complete handshake (safe here - main thread context)
+                autoSaveCheck();
             }
             
             // Handle PMKID from M1 if present
@@ -508,6 +513,9 @@ void OinkMode::update() {
             }
         }
         
+        // Clear slot for next handshake
+        pendingHandshakeCreate.capturedMask = 0;
+        pendingHandshakeCreate.hasPMKID = false;
         pendingHandshakeCreateReady = false;
         pendingHandshakeCreateBusy = false;
     }
@@ -1712,21 +1720,41 @@ void OinkMode::processEAPOL(const uint8_t* payload, uint16_t len,
         }
     } else {
         // New handshake - queue for creation in main thread
-        if (!pendingHandshakeCreateBusy && !pendingHandshakeCreateReady) {
-            memcpy(pendingHandshakeCreate.bssid, bssid, 6);
-            memcpy(pendingHandshakeCreate.station, station, 6);
-            pendingHandshakeCreate.messageNum = messageNum;
+        // BUT: if frames arrive in quick succession (M1→M2→M3→M4 within ms),
+        // we can't queue them all (single slot). Solution: process immediately
+        // in callback by writing to static buffer that main thread will consume.
+        // This is safe because we're just copying data, not allocating.
+        
+        if (!pendingHandshakeCreateBusy) {
+            // Check if slot already has a frame for this handshake
+            bool sameHandshake = pendingHandshakeCreateReady &&
+                                 memcmp(pendingHandshakeCreate.bssid, bssid, 6) == 0 &&
+                                 memcmp(pendingHandshakeCreate.station, station, 6) == 0;
             
-            // Copy EAPOL frame
-            uint16_t copyLen = min((uint16_t)sizeof(pendingHandshakeCreate.eapolData), len);
-            memcpy(pendingHandshakeCreate.eapolData, payload, copyLen);
-            pendingHandshakeCreate.eapolLen = copyLen;
-            
-            // Check if this M1 has PMKID already extracted (handled above)
-            pendingHandshakeCreate.hasPMKID = false;  // PMKID handled separately
-            
-            pendingHandshakeCreateReady = true;
-            queueLog("[OINK] EAPOL M%d queued for creation", messageNum);
+            if (!pendingHandshakeCreateReady || sameHandshake) {
+                // Either slot is free, or it's for the same handshake (update it)
+                if (!pendingHandshakeCreateReady) {
+                    // First frame for this handshake - init the slot
+                    memcpy(pendingHandshakeCreate.bssid, bssid, 6);
+                    memcpy(pendingHandshakeCreate.station, station, 6);
+                    pendingHandshakeCreate.messageNum = messageNum;  // Will be ignored, we have all frames
+                    pendingHandshakeCreate.capturedMask = 0;  // Clear mask
+                    pendingHandshakeCreate.hasPMKID = false;
+                }
+                
+                // Store this frame in the appropriate slot (M1-M4 → index 0-3)
+                uint8_t frameIdx = messageNum - 1;
+                if (frameIdx < 4) {
+                    uint16_t copyLen = min((uint16_t)512, len);
+                    memcpy(pendingHandshakeCreate.frames[frameIdx].data, payload, copyLen);
+                    pendingHandshakeCreate.frames[frameIdx].len = copyLen;
+                    pendingHandshakeCreate.capturedMask |= (1 << frameIdx);
+                }
+                
+                pendingHandshakeCreateReady = true;
+                queueLog("[OINK] EAPOL M%d queued for creation", messageNum);
+            }
+            // else: slot full with different handshake, drop this frame (rare race)
         }
     }
 }

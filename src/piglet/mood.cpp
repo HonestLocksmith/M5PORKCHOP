@@ -214,8 +214,8 @@ static bool tryQueueRiddle() {
     extern Porkchop porkchop;
     if (porkchop.getMode() != PorkchopMode::IDLE) return false;
     
-    // 15% chance per phrase cycle in IDLE - high enough to see it, rare enough to feel special
-    if (random(0, 100) >= 15) return false;
+    // 30% chance per phrase cycle in IDLE - high enough to see it, rare enough to feel special
+    if (random(0, 100) >= 30) return false;
     
     // Mark as shown - no more riddles this boot
     riddleShownThisBoot = true;

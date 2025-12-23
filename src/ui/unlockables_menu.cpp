@@ -16,18 +16,23 @@ bool UnlockablesMenu::exitRequested = false;
 bool UnlockablesMenu::textEditing = false;
 String UnlockablesMenu::textBuffer = "";
 
-// The unlockables - add more here as lore expands
-// Hash generated: SHA256(phrase) in lowercase hex
+// The unlockables - secrets for those who seek
+// Hash: SHA256(phrase) - lowercase hex, lowercase input
 static const UnlockableItem UNLOCKABLES[] = {
-    // Bit 0: PROPHECY - phrase is "dtr rts zero" (from riddle's final line)
+    // Bit 0: commit messages speak in riddles
     { 
         "PROPHECY", 
         "THE PROPHECY SPEAKS THE KEY",
         "13ca9c448763034b2d1b1ec33b449ae90433634c16b50a0a9fba6f4b5a67a72a",
         0 
     },
-    // Future unlockables can be added here
-    // { "NEXT_SECRET", "HINT TEXT", "sha256hash...", 1 },
+    // Bit 1: persistence is immortality
+    {
+        "1MM0RT4L",
+        "PIG SURVIVES M5BURNER",
+        "6c58bc00fea09c8d7fdb97c7b58741ad37bd7ba8e5c76d35076e3b57071b172b",
+        1
+    },
 };
 
 static const uint8_t TOTAL_UNLOCKABLES = sizeof(UNLOCKABLES) / sizeof(UNLOCKABLES[0]);

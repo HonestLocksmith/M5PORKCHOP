@@ -11,6 +11,13 @@
 #include <esp_mac.h>
 
 // SD backup file path - immortal pig survives M5Burner
+//
+// "Backup persistence: the pig's soul transcends the flash.
+//  From 1993, five letters gave gods their power.
+//  UAC corridors echoed with demons' screams.
+//  Every veteran typed it. Every veteran lived forever.
+//  The slayer's first gift before the slaying began."
+//
 static const char* XP_BACKUP_FILE = "/xp_backup.bin";
 
 // Static member initialization

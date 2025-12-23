@@ -27,6 +27,10 @@ Preferences XP::prefs;
 bool XP::initialized = false;
 void (*XP::levelUpCallback)(uint8_t, uint8_t) = nullptr;
 
+// Deferred save flag - set by achievements/unlockables, processed by processPendingSave()
+// Avoids SD writes during active WiFi promiscuous mode (bus contention)
+static volatile bool pendingSaveFlag = false;
+
 // XP values for each event type (v0.1.8 rebalanced - nerf spam, buff skill)
 static const uint16_t XP_VALUES[] = {
     1,      // NETWORK_FOUND
@@ -473,6 +477,16 @@ void XP::save() {
     
     // Backup to SD - pig survives M5Burner / NVS wipes
     backupToSD();
+}
+
+void XP::processPendingSave() {
+    // Process deferred saves from achievements/unlockables
+    // Call from safe context (mode exit, IDLE, etc.) to avoid SD bus contention
+    if (pendingSaveFlag) {
+        pendingSaveFlag = false;
+        save();
+        Serial.println("[XP] Deferred save completed");
+    }
 }
 
 // Static for km tracking - needs to be reset on session start
@@ -1093,8 +1107,9 @@ void XP::unlockAchievement(PorkAchievement ach) {
         delay(500);  // let user read the toast
     }
     
-    // Save immediately to persist the achievement
-    save();
+    // Defer save to avoid SD writes during active WiFi mode
+    // Will be processed by processPendingSave() in main loop or mode exit
+    pendingSaveFlag = true;
 }
 
 bool XP::hasAchievement(PorkAchievement ach) {
@@ -1119,7 +1134,7 @@ uint8_t XP::getUnlockedCount() {
 void XP::setUnlockable(uint8_t bitIndex) {
     if (bitIndex >= 32) return;  // Only 32 bits available
     data.unlockables |= (1UL << bitIndex);
-    save();  // Persist immediately
+    pendingSaveFlag = true;  // Defer save to avoid bus contention
 }
 
 bool XP::hasUnlockable(uint8_t bitIndex) {

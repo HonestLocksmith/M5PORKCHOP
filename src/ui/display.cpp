@@ -755,6 +755,7 @@ void Display::showLevelUp(uint8_t oldLevel, uint8_t newLevel) {
             break;  // Any key dismisses
         }
         delay(50);
+        yield();  // Feed watchdog during long celebration
     }
 }
 
@@ -824,6 +825,7 @@ void Display::showClassPromotion(const char* oldClass, const char* newClass) {
             break;
         }
         delay(50);
+        yield();  // Feed watchdog during long celebration
     }
 }
 

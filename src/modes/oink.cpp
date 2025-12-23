@@ -307,6 +307,9 @@ void OinkMode::stop() {
     
     esp_wifi_set_promiscuous(false);
     
+    // Process any deferred XP saves now that WiFi is off
+    XP::processPendingSave();
+    
     // Free beacon frame
     if (beaconFrame) {
         free(beaconFrame);
@@ -1929,6 +1932,32 @@ void OinkMode::autoSaveCheck() {
         return;
     }
     
+    // Check if there's anything to save before pausing promiscuous
+    bool hasUnsavedHS = false;
+    bool hasUnsavedPMKID = false;
+    
+    for (const auto& hs : handshakes) {
+        if (hs.isComplete() && !hs.saved && hs.saveAttempts < 3) {
+            hasUnsavedHS = true;
+            break;
+        }
+    }
+    for (const auto& p : pmkids) {
+        if (!p.saved && p.ssid[0] != 0) {
+            hasUnsavedPMKID = true;
+            break;
+        }
+    }
+    
+    if (!hasUnsavedHS && !hasUnsavedPMKID) {
+        return;  // Nothing to save, skip promiscuous pause
+    }
+    
+    // Pause promiscuous mode for safe SD access (avoids SPI bus contention)
+    // Brief ~50-100ms gap is acceptable - we just captured what we needed
+    esp_wifi_set_promiscuous(false);
+    delay(5);  // Let SPI bus settle
+    
     // Save any unsaved complete handshakes
     for (auto& hs : handshakes) {
         if (hs.isComplete() && !hs.saved && hs.saveAttempts < 3) {
@@ -1993,6 +2022,9 @@ void OinkMode::autoSaveCheck() {
     
     // Also save any unsaved PMKIDs
     saveAllPMKIDs();
+    
+    // Resume promiscuous mode
+    esp_wifi_set_promiscuous(true);
 }
 
 // PCAP file format structures
@@ -2168,7 +2200,7 @@ bool OinkMode::savePMKID22000(const CapturedPMKID& p, const char* path) {
         return false;
     }
     
-    File f = SD.open(path, FILE_WRITE);;
+    File f = SD.open(path, FILE_WRITE);
     if (!f) {
         Serial.printf("[OINK] Failed to create PMKID file: %s\n", path);
         return false;

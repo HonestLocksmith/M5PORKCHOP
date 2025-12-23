@@ -214,6 +214,7 @@ class XP {
 public:
     static void init();
     static void save();
+    static void processPendingSave();  // Process deferred saves (call from safe context)
     
     // XP operations
     static void addXP(XPEvent event);

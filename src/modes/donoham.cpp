@@ -99,6 +99,10 @@ static PendingHandshakeFrame pendingHandshake;
 static volatile bool pendingHandshakeCapture = false;
 static char pendingHandshakeSSID[33] = {0};
 
+// Deferred save flag - set during update(), processed in stop() after promiscuous disabled
+// Avoids SD/WiFi SPI bus contention that can cause crashes
+static volatile bool pendingSaveFlag = false;
+
 // Channel order: 1, 6, 11 first (non-overlapping), then fill in
 static const uint8_t CHANNEL_ORDER[] = {1, 6, 11, 2, 7, 12, 3, 8, 13, 4, 9, 5, 10};
 
@@ -237,7 +241,11 @@ void DoNoHamMode::stop() {
     // Disable promiscuous mode
     esp_wifi_set_promiscuous(false);
     
-    // Save any unsaved data
+    // Process any deferred XP saves now that WiFi is off
+    XP::processPendingSave();
+    
+    // Process deferred capture saves now that WiFi is off (SPI bus safe)
+    pendingSaveFlag = false;  // Clear flag before processing
     saveAllPMKIDs();
     saveAllHandshakes();
     
@@ -281,10 +289,9 @@ void DoNoHamMode::stopSeamless() {
     
     // DON'T disable promiscuous mode - OINK will take over
     // DON'T clear vectors - let them die naturally
-    
-    // Save any unsaved data
-    saveAllPMKIDs();
-    saveAllHandshakes();
+    // DON'T save to SD - promiscuous still active, SPI bus contention risk
+    // Data remains in RAM, will be saved when mode fully exits via stop()
+    pendingSaveFlag = true;  // Mark for save when WiFi eventually stops
     
     // Free beacon memory since OINK will recapture its own
     for (auto& hs : handshakes) {
@@ -361,17 +368,21 @@ void DoNoHamMode::update() {
                     pmkids[idx].ssid[32] = 0;
                     pmkids[idx].timestamp = now;
                     
-                    // Announce capture
+                    // Announce capture + immediate safe save
                     if (pendingPMKIDCreate.ssid[0] != 0) {
                         Serial.printf("[DNH] PMKID captured: %s\n", pendingPMKIDCreate.ssid);
                         Display::showToast("BOOMBOCLAAT! PMKID");
-                        M5.Speaker.tone(880, 100);
-                        delay(50);
-                        M5.Speaker.tone(1100, 100);
-                        delay(50);
-                        M5.Speaker.tone(1320, 100);
-                        XP::addXP(XPEvent::DNH_PMKID_GHOST);
-                        Mood::onPMKIDCaptured();
+                        if (Config::personality().soundEnabled) {
+                            M5.Speaker.tone(880, 100);
+                        }
+                        // XP awarded via Mood::onPMKIDCaptured (don't double award)
+                        Mood::onPMKIDCaptured(pendingPMKIDCreate.ssid);
+                        
+                        // Immediate save with brief promiscuous pause (safe SD access)
+                        esp_wifi_set_promiscuous(false);
+                        delay(5);
+                        saveAllPMKIDs();
+                        esp_wifi_set_promiscuous(true);
                     } else {
                         Serial.println("[DNH] PMKID captured but SSID unknown");
                     }
@@ -454,15 +465,22 @@ void DoNoHamMode::update() {
         pendingHandshakeBusy = false;
     }
     
-    // Process handshake capture event (UI update)
+    // Process handshake capture event (UI update + immediate safe save)
     if (pendingHandshakeCapture) {
         Display::showToast("NATURAL HANDSHAKE BLESSED - RESPECT DI HERB");
-        M5.Speaker.tone(880, 100);
-        delay(50);
-        M5.Speaker.tone(1320, 100);
-        XP::addXP(XPEvent::HANDSHAKE_CAPTURED);
-        Mood::onHandshakeCaptured();
+        if (Config::personality().soundEnabled) {
+            M5.Speaker.tone(880, 100);
+        }
+        // XP awarded via Mood::onHandshakeCaptured (don't double award)
+        Mood::onHandshakeCaptured(pendingHandshakeSSID);
         pendingHandshakeCapture = false;
+        
+        // Immediate save with brief promiscuous pause (safe SD access)
+        // ~50ms gap is acceptable - we just captured what we needed
+        esp_wifi_set_promiscuous(false);
+        delay(5);  // Let SPI bus settle
+        saveAllHandshakes();
+        esp_wifi_set_promiscuous(true);
     }
     
     // Channel hopping state machine
@@ -533,10 +551,10 @@ void DoNoHamMode::update() {
         lastStatsDecay = now;
     }
     
-    // Periodic save (every 2 seconds)
-    if (now - lastSaveTime > 2000) {
-        saveAllPMKIDs();
-        saveAllHandshakes();
+    // Backup save flag (every 30 seconds) - catches any missed immediate saves
+    // Actual save deferred to stop() after WiFi promiscuous disabled
+    if (now - lastSaveTime > 30000) {
+        pendingSaveFlag = true;  // Will be processed in stop() after WiFi off
         lastSaveTime = now;
     }
     

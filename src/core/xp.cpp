@@ -473,10 +473,26 @@ static uint32_t lastKmAwarded = 0;
 static uint16_t lastXPGainAmount = 0;
 static uint32_t lastXPGainMs = 0;
 
+// ============ ANTI-FARM SESSION CAPS ============
+// pig rewards effort, not exploitation
+static uint16_t sessionBleXP = 0;
+static uint16_t sessionWarhogXP = 0;
+static bool bleCapWarned = false;
+static bool warhogCapWarned = false;
+static const uint16_t BLE_XP_CAP = 500;      // ~250 bursts worth
+static const uint16_t WARHOG_XP_CAP = 300;   // ~150 geotagged networks
+
 void XP::startSession() {
     memset(&session, 0, sizeof(session));
     session.startTime = millis();
     lastKmAwarded = 0;  // Reset km counter for new session
+    
+    // Reset anti-farm caps for new session
+    sessionBleXP = 0;
+    sessionWarhogXP = 0;
+    bleCapWarned = false;
+    warhogCapWarned = false;
+    
     data.sessions++;
     
     // pig wakes. pig demands action.
@@ -548,29 +564,69 @@ void XP::addXP(XPEvent event) {
             break;
         case XPEvent::WARHOG_LOGGED:
             data.gpsNetworks++;
+            // Anti-farm: cap WARHOG XP per session
+            if (sessionWarhogXP >= WARHOG_XP_CAP) {
+                if (!warhogCapWarned) {
+                    Display::showToast("SNIFFED ENOUGH. REST.");
+                    warhogCapWarned = true;
+                }
+                amount = 0;  // Still track stats, no XP
+            } else {
+                sessionWarhogXP += amount;
+            }
             break;
         case XPEvent::BLE_BURST:
             data.lifetimeBLE++;
             session.blePackets++;
+            // Anti-farm: cap BLE XP per session
+            if (sessionBleXP >= BLE_XP_CAP) {
+                if (!bleCapWarned) {
+                    Display::showToast("SPAM TIRED. FIND PREY.");
+                    bleCapWarned = true;
+                }
+                amount = 0;
+            } else {
+                sessionBleXP += amount;
+            }
             break;
         case XPEvent::BLE_APPLE:
             data.lifetimeBLE++;
             session.blePackets++;
+            if (sessionBleXP >= BLE_XP_CAP) {
+                amount = 0;
+            } else {
+                sessionBleXP += amount;
+            }
             break;
         case XPEvent::BLE_ANDROID:
             data.lifetimeBLE++;
             data.androidBLE++;
             session.blePackets++;
+            if (sessionBleXP >= BLE_XP_CAP) {
+                amount = 0;
+            } else {
+                sessionBleXP += amount;
+            }
             break;
         case XPEvent::BLE_SAMSUNG:
             data.lifetimeBLE++;
             data.samsungBLE++;
             session.blePackets++;
+            if (sessionBleXP >= BLE_XP_CAP) {
+                amount = 0;
+            } else {
+                sessionBleXP += amount;
+            }
             break;
         case XPEvent::BLE_WINDOWS:
             data.lifetimeBLE++;
             data.windowsBLE++;
             session.blePackets++;
+            if (sessionBleXP >= BLE_XP_CAP) {
+                amount = 0;
+            } else {
+                sessionBleXP += amount;
+            }
             break;
         case XPEvent::GPS_LOCK:
             session.gpsLockAwarded = true;

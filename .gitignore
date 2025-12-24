@@ -13,3 +13,4 @@ release_notes/
 temp/
 docs/secret/lol_this_is_my_gitignore.txt
 secret/it_ignores_what_i_tell_it.txt
+secret/but_you_ignore_this.txt

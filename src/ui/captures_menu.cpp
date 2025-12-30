@@ -43,6 +43,12 @@ void CapturesMenu::hide() {
 void CapturesMenu::scanCaptures() {
     captures.clear();
     
+    // Guard: Skip if no SD card available
+    if (!Config::isSDAvailable()) {
+        Serial.println("[CAPTURES] No SD card available");
+        return;
+    }
+    
     if (!SD.exists("/handshakes")) {
         Serial.println("[CAPTURES] No handshakes directory");
         return;

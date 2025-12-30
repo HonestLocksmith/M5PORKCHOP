@@ -714,6 +714,9 @@ void DoNoHamMode::ageOutStaleNetworks() {
 }
 
 void DoNoHamMode::saveAllPMKIDs() {
+    // Guard: Skip if no SD card available (graceful degradation)
+    if (!Config::isSDAvailable()) return;
+    
     // Save PMKIDs in hashcat 22000 format
     for (auto& p : pmkids) {
         if (p.saved) continue;
@@ -837,6 +840,9 @@ void DoNoHamMode::saveAllPMKIDs() {
 }
 
 void DoNoHamMode::saveAllHandshakes() {
+    // Guard: Skip if no SD card available (graceful degradation)
+    if (!Config::isSDAvailable()) return;
+    
     // Save handshakes in hashcat 22000 format (WPA*02)
     for (auto& hs : handshakes) {
         if (hs.saved) continue;

@@ -616,11 +616,11 @@ void Display::showInfoBox(const String& title, const String& line1,
                 while (M5Cardputer.Keyboard.isPressed()) {
                     M5.update();
                     M5Cardputer.update();
-                    delay(10);
+                    delay(20);  // TCA8418 I2C throttle
                 }
                 break;
             }
-            delay(10);
+            delay(20);  // TCA8418 I2C throttle
         }
     }
 }
@@ -653,7 +653,7 @@ bool Display::showConfirmBox(const String& title, const String& message) {
                 if (c == 'n' || c == 'N') return false;
             }
         }
-        delay(10);
+        delay(20);  // TCA8418 I2C throttle
     }
     return false;  // Timeout = No
 }

@@ -1442,6 +1442,12 @@ uint8_t CallPapaMode::getDialoguePhase() {
 
 // Deserialize and save PMKID
 bool CallPapaMode::savePMKID(const uint8_t* data, uint16_t len) {
+    // Guard: Skip if no SD card available (graceful degradation)
+    if (!Config::isSDAvailable()) {
+        Serial.println("[SON-OF-PIG] No SD card - PMKID not saved");
+        return false;
+    }
+    
     // PMKID format: BSSID[6] + STATION[6] + SSID_LEN[1] + SSID[32] + PMKID[16] + TIMESTAMP[4] = 65 bytes
     if (len < 61) {  // Minimum: 6+6+1+0+16+4 = 33, but we expect at least some SSID
         Serial.printf("[SON-OF-PIG] PMKID data too short: %d bytes\n", len);
@@ -1523,6 +1529,12 @@ bool CallPapaMode::savePMKID(const uint8_t* data, uint16_t len) {
 
 // Deserialize and save Handshake
 bool CallPapaMode::saveHandshake(const uint8_t* data, uint16_t len) {
+    // Guard: Skip if no SD card available (graceful degradation)
+    if (!Config::isSDAvailable()) {
+        Serial.println("[SON-OF-PIG] No SD card - Handshake not saved");
+        return false;
+    }
+    
     // Handshake format (simplified for BLE transfer):
     // BSSID[6] + STATION[6] + SSID_LEN[1] + SSID[32] + MASK[1] + BEACON_LEN[2] + BEACON[n] + FRAMES...
     if (len < 48) {

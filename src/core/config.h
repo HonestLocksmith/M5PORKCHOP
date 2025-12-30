@@ -7,11 +7,18 @@
 #define CONFIG_FILE "/porkchop.conf"
 #define PERSONALITY_FILE "/personality.json"
 
+// GPS module source selection
+enum class GPSSource : uint8_t {
+    GROVE = 0,      // Grove port GPS (G1/G2) - works on all Cardputer models
+    CAP_LORA = 1    // Cap LoRa868 GPS (G15/G13) - Cardputer ADV only
+};
+
 // GPS power management settings
 struct GPSConfig {
     bool enabled = true;
-    uint8_t rxPin = 1;              // G1 for Grove GPS, G13 for Cap LoRa868
-    uint8_t txPin = 2;              // G2 for Grove GPS, G15 for Cap LoRa868
+    GPSSource source = GPSSource::GROVE;  // GPS module source (auto-selects pins)
+    uint8_t rxPin = 1;              // G1 for Grove GPS, G15 for Cap LoRa868 (auto-set from source)
+    uint8_t txPin = 2;              // G2 for Grove GPS, G13 for Cap LoRa868 (auto-set from source)
     uint32_t baudRate = 115200;     // 115200 for most modern GPS modules
     uint16_t updateInterval = 5;        // Seconds between GPS updates
     uint16_t sleepTimeMs = 5000;        // Sleep duration when stationary

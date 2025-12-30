@@ -2,8 +2,7 @@
   "version": "1.0.0",
   "gps": {
     "enabled": true,
-    "rxPin": 1,
-    "txPin": 2,
+    "gpsSource": 0,
     "baudRate": 115200,
     "updateInterval": 5,
     "powerSave": true

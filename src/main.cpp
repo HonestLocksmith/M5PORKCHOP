@@ -58,8 +58,16 @@ void setup() {
 
     // Initialize GPS (if enabled)
     if (Config::gps().enabled) {
+        // Hardware detection: warn if Cap LoRa GPS selected on non-ADV hardware
+        if (Config::gps().source == GPSSource::CAP_LORA) {
+            auto board = M5.getBoard();
+            if (board != m5::board_t::board_M5CardputerADV) {
+                Serial.println("[GPS] WARNING: Cap LoRa868 GPS selected but hardware is not Cardputer ADV!");
+                Serial.println("[GPS] Cap LoRa868 requires Cardputer ADV EXT bus. Check config.");
+            }
+        }
         GPS::init(Config::gps().rxPin, Config::gps().txPin, Config::gps().baudRate);
-        Display::showProgress("gps online.", 50);
+        Display::showProgress("gps check.", 50);
     }
 
     // Initialize ML subsystem

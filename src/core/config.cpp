@@ -152,8 +152,15 @@ bool Config::load() {
     // GPS config
     if (doc["gps"].is<JsonObject>()) {
         gpsConfig.enabled = doc["gps"]["enabled"] | true;
-        gpsConfig.rxPin = doc["gps"]["rxPin"] | 1;
-        gpsConfig.txPin = doc["gps"]["txPin"] | 2;
+        gpsConfig.source = static_cast<GPSSource>(doc["gps"]["gpsSource"] | 0);
+        // Auto-set pins based on source (ignore legacy rxPin/txPin from config)
+        if (gpsConfig.source == GPSSource::CAP_LORA) {
+            gpsConfig.rxPin = 15;  // Cap LoRa868 GPS RX
+            gpsConfig.txPin = 13;  // Cap LoRa868 GPS TX
+        } else {
+            gpsConfig.rxPin = 1;   // Grove GPS RX (default)
+            gpsConfig.txPin = 2;   // Grove GPS TX (default)
+        }
         gpsConfig.baudRate = doc["gps"]["baudRate"] | 115200;
         gpsConfig.updateInterval = doc["gps"]["updateInterval"] | 5;
         gpsConfig.sleepTimeMs = doc["gps"]["sleepTimeMs"] | 5000;
@@ -269,8 +276,7 @@ bool Config::save() {
     
     // GPS config
     doc["gps"]["enabled"] = gpsConfig.enabled;
-    doc["gps"]["rxPin"] = gpsConfig.rxPin;
-    doc["gps"]["txPin"] = gpsConfig.txPin;
+    doc["gps"]["gpsSource"] = static_cast<uint8_t>(gpsConfig.source);
     doc["gps"]["baudRate"] = gpsConfig.baudRate;
     doc["gps"]["updateInterval"] = gpsConfig.updateInterval;
     doc["gps"]["sleepTimeMs"] = gpsConfig.sleepTimeMs;

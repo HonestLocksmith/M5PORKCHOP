@@ -5,6 +5,10 @@
 #include <M5Unified.h>
 #include <vector>
 
+// FreeRTOS task helpers (ESP32)
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+
 // Upload status for display
 enum class WigleFileStatus {
     LOCAL,      // Not uploaded yet
@@ -28,7 +32,7 @@ public:
     static void draw(M5Canvas& canvas);
     static bool isActive() { return active; }
     static size_t getCount() { return files.size(); }
-    static String getSelectedInfo();
+    static void getSelectedInfo(char* out, size_t len);
     
 private:
     static std::vector<WigleFileInfo> files;
@@ -40,6 +44,20 @@ private:
     static bool nukeConfirmActive;  // Nuke confirmation modal
     static bool connectingWiFi;     // WiFi connection in progress
     static bool uploadingFile;      // Upload in progress
+
+    // Upload worker task (runs TLS off the Arduino loopTask stack)
+    static TaskHandle_t uploadTaskHandle;
+    static volatile bool uploadTaskDone;
+    static volatile bool uploadTaskSuccess;
+    static uint8_t uploadTaskIndex;  // which file index was uploaded
+    static char uploadTaskResultMsg[64];
+
+    struct UploadTaskCtx {
+        char fullPath[128];
+        uint8_t index;
+    };
+
+    static void uploadTaskFn(void* pv);
     
     static const uint8_t VISIBLE_ITEMS = 5;
     
@@ -50,5 +68,5 @@ private:
     static void drawConnecting(M5Canvas& canvas);
     static void uploadSelected();
     static void nukeTrack();
-    static String formatSize(uint32_t bytes);
+    static void formatSize(char* out, size_t len, uint32_t bytes);
 };

@@ -11,7 +11,7 @@
 bool SwineStats::active = false;
 bool SwineStats::keyWasPressed = false;
 BuffState SwineStats::currentBuffs = {0, 0};
-uint8_t SwineStats::currentClassBuffs = 0;
+uint16_t SwineStats::currentClassBuffs = 0;
 uint32_t SwineStats::lastBuffUpdate = 0;
 StatsTab SwineStats::currentTab = StatsTab::STATS;
 
@@ -52,7 +52,9 @@ static const char* CLASS_BUFF_NAMES[] = {
     "SH4RP TUSKS",   // R0GU3
     "CR4CK NOSE",    // EXPL01T
     "1R0N TUSKS",    // WARL0RD
-    "0MN1P0RK"       // L3G3ND
+    "0MN1P0RK",      // L3G3ND
+    "K3RN3L H0G",    // L41+
+    "B4C0NM4NC3R"    // L46+
 };
 
 static const char* CLASS_BUFF_DESCS[] = {
@@ -62,8 +64,11 @@ static const char* CLASS_BUFF_DESCS[] = {
     "+1s lock",
     "+10% cap XP",
     "-1ms jitter",
-    "+5% all"
+    "+5% all",
+    "+10% cap/dist",
+    "+15% cap/dist"
 };
+static const uint8_t CLASS_BUFF_COUNT = sizeof(CLASS_BUFF_NAMES) / sizeof(CLASS_BUFF_NAMES[0]);
 
 // Stat names (leet one-word)
 static const char* STAT_LABELS[] = {
@@ -149,12 +154,11 @@ void SwineStats::handleInput() {
             snprintf(buf, sizeof(buf), "T1TLE: %s", newTitle);
             Display::showToast(buf);
         }
-        delay(500);
         return;
     }
     
-    // Exit on backtick or Esc
-    if (M5Cardputer.Keyboard.isKeyPressed('`') || M5Cardputer.Keyboard.isKeyPressed(KEY_BACKSPACE)) {
+    // Backspace - go back
+    if (M5Cardputer.Keyboard.isKeyPressed(KEY_BACKSPACE)) {
         hide();
     }
 }
@@ -213,38 +217,43 @@ BuffState SwineStats::calculateBuffs() {
     return state;
 }
 
-uint8_t SwineStats::calculateClassBuffs() {
+uint16_t SwineStats::calculateClassBuffs() {
     uint8_t level = XP::getLevel();
-    uint8_t buffs = 0;
+    uint16_t buffs = 0;
     
     // Cumulative buffs based on class tier
-    if (level >= 6)  buffs |= (uint8_t)ClassBuff::P4CK3T_NOSE;  // SN1FF3R
-    if (level >= 11) buffs |= (uint8_t)ClassBuff::H4RD_SNOUT;   // PWNER
-    if (level >= 16) buffs |= (uint8_t)ClassBuff::R04D_H0G;     // R00T
-    if (level >= 21) buffs |= (uint8_t)ClassBuff::SH4RP_TUSKS;  // R0GU3
-    if (level >= 26) buffs |= (uint8_t)ClassBuff::CR4CK_NOSE;   // EXPL01T
-    if (level >= 31) buffs |= (uint8_t)ClassBuff::IR0N_TUSKS;   // WARL0RD
-    if (level >= 36) buffs |= (uint8_t)ClassBuff::OMNI_P0RK;    // L3G3ND
+    if (level >= 6)  buffs |= (uint16_t)ClassBuff::P4CK3T_NOSE;  // SN1FF3R
+    if (level >= 11) buffs |= (uint16_t)ClassBuff::H4RD_SNOUT;   // PWNER
+    if (level >= 16) buffs |= (uint16_t)ClassBuff::R04D_H0G;     // R00T
+    if (level >= 21) buffs |= (uint16_t)ClassBuff::SH4RP_TUSKS;  // R0GU3
+    if (level >= 26) buffs |= (uint16_t)ClassBuff::CR4CK_NOSE;   // EXPL01T
+    if (level >= 31) buffs |= (uint16_t)ClassBuff::IR0N_TUSKS;   // WARL0RD
+    if (level >= 36) buffs |= (uint16_t)ClassBuff::OMNI_P0RK;    // L3G3ND
+    if (level >= 41) buffs |= (uint16_t)ClassBuff::K3RN3L_H0G;   // K3RN3L H0G
+    if (level >= 46) {
+        buffs |= (uint16_t)ClassBuff::B4C0NM4NC3R;               // B4C0NM4NC3R
+        buffs &= ~(uint16_t)ClassBuff::K3RN3L_H0G;               // Supersede lower tier
+    }
     
     return buffs;
 }
 
 bool SwineStats::hasClassBuff(ClassBuff cb) {
-    return (calculateClassBuffs() & (uint8_t)cb) != 0;
+    return (calculateClassBuffs() & (uint16_t)cb) != 0;
 }
 
 uint8_t SwineStats::getDeauthBurstCount() {
     BuffState buffs = calculateBuffs();
-    uint8_t classBuffs = calculateClassBuffs();
+    uint16_t classBuffs = calculateClassBuffs();
     uint8_t base = 4;  // Default burst count (quality over quantity)
     
     // Class buff: H4RD_SNOUT +1 burst (applied first)
-    if (classBuffs & (uint8_t)ClassBuff::H4RD_SNOUT) {
+    if (classBuffs & (uint16_t)ClassBuff::H4RD_SNOUT) {
         base = 6;
     }
     
     // Class buff: OMNI_P0RK +5% (applied to base)
-    if (classBuffs & (uint8_t)ClassBuff::OMNI_P0RK) {
+    if (classBuffs & (uint16_t)ClassBuff::OMNI_P0RK) {
         base = (base * 105 + 50) / 100;  // Round
     }
     
@@ -268,11 +277,11 @@ uint8_t SwineStats::getDeauthBurstCount() {
 
 uint8_t SwineStats::getDeauthJitterMax() {
     BuffState buffs = calculateBuffs();
-    uint8_t classBuffs = calculateClassBuffs();
+    uint16_t classBuffs = calculateClassBuffs();
     uint8_t base = 5;  // Default 1-5ms jitter
     
     // Class buff: IR0N_TUSKS -1ms min jitter (1-5 -> 0-4)
-    if (classBuffs & (uint8_t)ClassBuff::IR0N_TUSKS) {
+    if (classBuffs & (uint16_t)ClassBuff::IR0N_TUSKS) {
         base = 4;
     }
     
@@ -286,16 +295,16 @@ uint8_t SwineStats::getDeauthJitterMax() {
 
 uint16_t SwineStats::getChannelHopInterval() {
     BuffState buffs = calculateBuffs();
-    uint8_t classBuffs = calculateClassBuffs();
+    uint16_t classBuffs = calculateClassBuffs();
     uint16_t base = Config::wifi().channelHopInterval;  // Default from config
     
     // Class buff: P4CK3T_NOSE -10% interval
-    if (classBuffs & (uint8_t)ClassBuff::P4CK3T_NOSE) {
+    if (classBuffs & (uint16_t)ClassBuff::P4CK3T_NOSE) {
         base = (base * 9) / 10;
     }
     
     // Class buff: OMNI_P0RK -5% interval
-    if (classBuffs & (uint8_t)ClassBuff::OMNI_P0RK) {
+    if (classBuffs & (uint16_t)ClassBuff::OMNI_P0RK) {
         base = (base * 95) / 100;
     }
     
@@ -314,12 +323,15 @@ uint16_t SwineStats::getChannelHopInterval() {
 
 float SwineStats::getXPMultiplier() {
     BuffState buffs = calculateBuffs();
-    uint8_t classBuffs = calculateClassBuffs();
+    uint16_t classBuffs = calculateClassBuffs();
     float mult = 1.0f;
     
     // Class buff: OMNI_P0RK +5% XP
-    if (classBuffs & (uint8_t)ClassBuff::OMNI_P0RK) {
+    if (classBuffs & (uint16_t)ClassBuff::OMNI_P0RK) {
         mult += 0.05f;
+    }
+    if (classBuffs & (uint16_t)ClassBuff::B4C0NM4NC3R) {
+        mult += 0.05f;  // +5% on top of OMNI_P0RK = +10% total
     }
     
     // Mood buff: SNOUT$HARP +25% XP
@@ -336,16 +348,16 @@ float SwineStats::getXPMultiplier() {
 }
 
 uint32_t SwineStats::getLockTime() {
-    uint8_t classBuffs = calculateClassBuffs();
+    uint16_t classBuffs = calculateClassBuffs();
     uint32_t base = Config::wifi().lockTime;  // From settings (default 4000ms)
     
     // Class buff: SH4RP_TUSKS +1s lock time (more time to discover clients)
-    if (classBuffs & (uint8_t)ClassBuff::SH4RP_TUSKS) {
+    if (classBuffs & (uint16_t)ClassBuff::SH4RP_TUSKS) {
         base += 1000;
     }
     
     // Class buff: OMNI_P0RK +5% lock time
-    if (classBuffs & (uint8_t)ClassBuff::OMNI_P0RK) {
+    if (classBuffs & (uint16_t)ClassBuff::OMNI_P0RK) {
         base = (base * 105) / 100;
     }
     
@@ -353,34 +365,44 @@ uint32_t SwineStats::getLockTime() {
 }
 
 float SwineStats::getDistanceXPMultiplier() {
-    uint8_t classBuffs = calculateClassBuffs();
+    uint16_t classBuffs = calculateClassBuffs();
     float mult = 1.0f;
     
     // Class buff: R04D_H0G +15% distance XP
-    if (classBuffs & (uint8_t)ClassBuff::R04D_H0G) {
+    if (classBuffs & (uint16_t)ClassBuff::R04D_H0G) {
         mult += 0.15f;
     }
     
     // Class buff: OMNI_P0RK +5%
-    if (classBuffs & (uint8_t)ClassBuff::OMNI_P0RK) {
+    if (classBuffs & (uint16_t)ClassBuff::OMNI_P0RK) {
         mult *= 1.05f;
+    }
+    if (classBuffs & (uint16_t)ClassBuff::B4C0NM4NC3R) {
+        mult += 0.15f;
+    } else if (classBuffs & (uint16_t)ClassBuff::K3RN3L_H0G) {
+        mult += 0.10f;
     }
     
     return mult;
 }
 
 float SwineStats::getCaptureXPMultiplier() {
-    uint8_t classBuffs = calculateClassBuffs();
+    uint16_t classBuffs = calculateClassBuffs();
     float mult = 1.0f;
     
     // Class buff: CR4CK_NOSE +10% capture XP
-    if (classBuffs & (uint8_t)ClassBuff::CR4CK_NOSE) {
+    if (classBuffs & (uint16_t)ClassBuff::CR4CK_NOSE) {
         mult += 0.10f;
     }
     
     // Class buff: OMNI_P0RK +5%
-    if (classBuffs & (uint8_t)ClassBuff::OMNI_P0RK) {
+    if (classBuffs & (uint16_t)ClassBuff::OMNI_P0RK) {
         mult *= 1.05f;
+    }
+    if (classBuffs & (uint16_t)ClassBuff::B4C0NM4NC3R) {
+        mult += 0.15f;
+    } else if (classBuffs & (uint16_t)ClassBuff::K3RN3L_H0G) {
+        mult += 0.10f;
     }
     
     return mult;
@@ -395,6 +417,8 @@ const char* SwineStats::getClassBuffName(ClassBuff cb) {
         case ClassBuff::CR4CK_NOSE:  return CLASS_BUFF_NAMES[4];
         case ClassBuff::IR0N_TUSKS:  return CLASS_BUFF_NAMES[5];
         case ClassBuff::OMNI_P0RK:   return CLASS_BUFF_NAMES[6];
+        case ClassBuff::K3RN3L_H0G:  return CLASS_BUFF_NAMES[7];
+        case ClassBuff::B4C0NM4NC3R: return CLASS_BUFF_NAMES[8];
         default: return "???";
     }
 }
@@ -408,6 +432,8 @@ const char* SwineStats::getClassBuffDesc(ClassBuff cb) {
         case ClassBuff::CR4CK_NOSE:  return CLASS_BUFF_DESCS[4];
         case ClassBuff::IR0N_TUSKS:  return CLASS_BUFF_DESCS[5];
         case ClassBuff::OMNI_P0RK:   return CLASS_BUFF_DESCS[6];
+        case ClassBuff::K3RN3L_H0G:  return CLASS_BUFF_DESCS[7];
+        case ClassBuff::B4C0NM4NC3R: return CLASS_BUFF_DESCS[8];
         default: return "";
     }
 }
@@ -476,27 +502,30 @@ void SwineStats::draw(M5Canvas& canvas) {
 
 void SwineStats::drawTabBar(M5Canvas& canvas) {
     canvas.setTextSize(1);
-    
+    const int tabY = 0;
+    const int tabH = 10;
+    const int tabTextY = 6;  // Add 1px top padding to match bottom margin
+
     // Tab 1: ST4TS
     if (currentTab == StatsTab::STATS) {
-        canvas.fillRect(2, 0, 60, 10, COLOR_FG);
+        canvas.fillRect(2, tabY, 60, tabH, COLOR_FG);
         canvas.setTextColor(COLOR_BG);
     } else {
-        canvas.drawRect(2, 0, 60, 10, COLOR_FG);
+        canvas.drawRect(2, tabY, 60, tabH, COLOR_FG);
         canvas.setTextColor(COLOR_FG);
     }
     canvas.setTextDatum(middle_center);
-    canvas.drawString("ST4TS", 32, 5);
+    canvas.drawString("ST4TS", 32, tabTextY);
     
     // Tab 2: B00STS
     if (currentTab == StatsTab::BOOSTS) {
-        canvas.fillRect(65, 0, 60, 10, COLOR_FG);
+        canvas.fillRect(65, tabY, 60, tabH, COLOR_FG);
         canvas.setTextColor(COLOR_BG);
     } else {
-        canvas.drawRect(65, 0, 60, 10, COLOR_FG);
+        canvas.drawRect(65, tabY, 60, tabH, COLOR_FG);
         canvas.setTextColor(COLOR_FG);
     }
-    canvas.drawString("B00STS", 95, 5);
+    canvas.drawString("B00STS", 95, tabTextY);
     
     // Reset text color
     canvas.setTextColor(COLOR_FG);
@@ -564,9 +593,9 @@ void SwineStats::drawBuffsTab(M5Canvas& canvas) {
     
     // Show all active class buffs (permanent, based on level)
     if (currentClassBuffs != 0) {
-        for (int i = 0; i < 7; i++) {
+        for (uint8_t i = 0; i < CLASS_BUFF_COUNT; i++) {
             ClassBuff cb = (ClassBuff)(1 << i);
-            if (currentClassBuffs & (uint8_t)cb) {
+            if (currentClassBuffs & (uint16_t)cb) {
                 char buf[48];
                 snprintf(buf, sizeof(buf), "[*] %s %s", getClassBuffName(cb), getClassBuffDesc(cb));
                 canvas.drawString(buf, 5, y);
@@ -679,6 +708,11 @@ void SwineStats::drawStats(M5Canvas& canvas) {
     canvas.drawString("GH0STS:", col3, y);
     snprintf(buf, sizeof(buf), "%lu", (unsigned long)data.hiddenNetworks);
     canvas.drawString(buf, col4, y);
+
+    y += lineH;
+
+    // Row 5: Roulette (PiggyBlues no-reboot)
+    canvas.drawString("JST R0UL3T:", col1, y);
+    snprintf(buf, sizeof(buf), "%lu", (unsigned long)data.rouletteWins);
+    canvas.drawString(buf, col2, y);
 }
-
-

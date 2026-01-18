@@ -1,7 +1,9 @@
 // Piglet ASCII avatar implementation
 
 #include "avatar.h"
+#include "weather.h"
 #include "../ui/display.h"
+#include <time.h>
 
 // Static members
 AvatarState Avatar::currentState = AvatarState::NEUTRAL;
@@ -10,6 +12,10 @@ bool Avatar::earsUp = true;
 uint32_t Avatar::lastBlinkTime = 0;
 uint32_t Avatar::blinkInterval = 3000;
 int Avatar::moodIntensity = 0;  // Phase 8: -100 to 100
+
+// Cute jump state
+bool Avatar::jumpActive = false;
+uint32_t Avatar::jumpStartTime = 0;
 
 // Walk transition state
 bool Avatar::transitioning = false;
@@ -26,12 +32,43 @@ static const uint32_t SNIFF_DURATION_MS = 600;  // 600ms for proper sniff cycle
 static uint8_t sniffFrame = 0;  // Alternates between nose shapes (oo, oO, Oo)
 
 // Walk transition timing
-static const uint32_t TRANSITION_DURATION_MS = 400;  // 400ms smooth walk animation (best practices §18)
+static const uint32_t TRANSITION_DURATION_MS = 1200;  // 1.2s slow relaxed walk (was 400ms - too hectic)
+
+// Rest cooldown after grass stops - prevents immediate re-triggering
+static uint32_t lastGrassStopTime = 0;
+static const uint32_t GRASS_REST_COOLDOWN_MS = 3000;  // 3 second chill period after grass stops
 
 // Attack shake state (visual feedback for captures)
 static bool attackShakeActive = false;
 static bool attackShakeStrong = false;
 static uint32_t attackShakeRefreshTime = 0;
+
+// Thunder flash state (weather effect - invert colors)
+static bool thunderFlashActive = false;
+
+// Night sky star system state
+Avatar::Star Avatar::stars[15] = {{0}};
+uint8_t Avatar::starCount = 0;
+uint32_t Avatar::lastStarSpawn = 0;
+uint32_t Avatar::nextSpawnDelay = 2000;
+bool Avatar::starsActive = false;
+uint32_t Avatar::lastNightCheck = 0;
+bool Avatar::cachedNightMode = false;
+
+// Color helper for thunder flash inversion (matches Sirloin)
+static uint16_t getDrawColor() {
+    if (thunderFlashActive) {
+        return getColorBG();  // Swap: draw with BG color during flash
+    }
+    return getColorFG();
+}
+
+static uint16_t getBGColor() {
+    if (thunderFlashActive) {
+        return getColorFG();  // Inverted while flashing
+    }
+    return getColorBG();
+}
 
 // Grass animation state
 bool Avatar::grassMoving = false;
@@ -145,13 +182,16 @@ void Avatar::init() {
     lastBlinkTime = millis();
     blinkInterval = random(4000, 8000);
     
-    // Init direction - default facing right (toward speech bubble)
-    facingRight = true;
-    onRightSide = false;  // Start on left side
+    // Init direction - start at LEFT or RIGHT edge (not center)
+    // This ensures bubble can float beside pig from the start
+    bool startRight = random(0, 2) == 0;
+    onRightSide = startRight;
+    currentX = startRight ? 108 : 20;  // Start at proper edge position
+    facingRight = !startRight;  // Face toward center (more interesting)
     lastFlipTime = millis();
-    flipInterval = random(10000, 30000);  // Walk timer: 10-30s
+    flipInterval = random(25000, 50000);  // First walk: 25-50s
     lastLookTime = millis();
-    lookInterval = random(8000, 20000);  // Look timer: 8-20s
+    lookInterval = random(3000, 8000);  // First look: 3-8s (let pig settle in)
     
     // Init grass pattern - full screen width at size 2 (~24 chars)
     grassMoving = false;
@@ -159,11 +199,21 @@ void Avatar::init() {
     pendingGrassStart = false;
     grassSpeed = 80;
     lastGrassUpdate = millis();
+    lastGrassStopTime = 0;  // No cooldown on fresh init
     for (int i = 0; i < 26; i++) {
         // Random grass pattern /\/\\//\/
         grassPattern[i] = (random(0, 2) == 0) ? '/' : '\\';
     }
     grassPattern[26] = '\0';
+
+    // Init star system, dormant until night
+    starsActive = false;
+    starCount = 0;
+    lastStarSpawn = 0;
+    nextSpawnDelay = 2000;
+    lastNightCheck = 0;
+    cachedNightMode = false;
+    initStarPositions();
 }
 
 void Avatar::setState(AvatarState state) {
@@ -206,6 +256,12 @@ void Avatar::sniff() {
     sniffStartTime = millis();
 }
 
+void Avatar::cuteJump() {
+    // Trigger a cute celebratory jump - higher and slower than walk bounce
+    jumpActive = true;
+    jumpStartTime = millis();
+}
+
 void Avatar::draw(M5Canvas& canvas) {
     uint32_t now = millis();
     
@@ -229,19 +285,41 @@ void Avatar::draw(M5Canvas& canvas) {
             currentX = transitionToX;
             facingRight = transitionToFacingRight;
             onRightSide = (currentX > 60);  // Track which side we're on
+            
             // Start grass now if it was pending
             if (pendingGrassStart) {
                 grassMoving = true;
                 pendingGrassStart = false;
+                facingRight = !grassDirection;  // Face opposite to grass movement
+            } else {
+                // === POST-WALK RANDOM BEHAVIOR ===
+                // After arriving somewhere, pig might do something interesting
+                int arrivalRoll = random(0, 100);
+                if (arrivalRoll < 20) {
+                    // 20%: Look around after arriving (curious)
+                    facingRight = !facingRight;
+                } else if (arrivalRoll < 35) {
+                    // 15%: Sniff the new area
+                    sniff();
+                } else if (arrivalRoll < 45) {
+                    // 10%: Quick ear wiggle (settling in)
+                    wiggleEars();
+                } else if (arrivalRoll < 55) {
+                    // 10%: Turn around completely (changed mind)
+                    facingRight = !transitionToFacingRight;
+                }
+                // 45%: Just face the direction we were walking
             }
-            // Reset look timer for new position
+            
+            // Reset look timer for new position with random delay
             lastLookTime = now;
-            lookInterval = random(2000, 5000);
+            lookInterval = random(1500, 6000);  // More variable
         } else {
             // Animate X position (ease in-out)
             float t = (float)elapsed / TRANSITION_DURATION_MS;
-            // Smooth step: 3t^2 - 2t^3
-            float smoothT = t * t * (3.0f - 2.0f * t);
+            // Heavy quintic ease: 6t^5 - 15t^4 + 10t^3 (more inertia than smooth step)
+            // Flatter acceleration/deceleration = heavier feel
+            float smoothT = t * t * t * (t * (t * 6.0f - 15.0f) + 10.0f);
             currentX = transitionFromX + (int)((transitionToX - transitionFromX) * smoothT);
         }
     }
@@ -265,42 +343,110 @@ void Avatar::draw(M5Canvas& canvas) {
 
     // Calculate intensity-adjusted intervals
     // Excited pig looks around more, sad pig stares
-    float flipMod = 1.0f - (moodIntensity / 150.0f);  // ~0.33 to ~1.66
-    uint32_t minWalk = (uint32_t)(15000 * flipMod);   // Walk timer: 15s base
-    uint32_t maxWalk = (uint32_t)(40000 * flipMod);   // Walk timer: 40s base
-    uint32_t minLook = (uint32_t)(8000 * flipMod);    // Look timer: 8s base (was 2s)
-    uint32_t maxLook = (uint32_t)(20000 * flipMod);   // Look timer: 20s base (was 6s)
+    // NOTE: Reduced mood effect (was /150, now /300) to prevent frantic movement at high happiness
+    float flipMod = 1.0f - (moodIntensity / 300.0f);  // ~0.66 to ~1.33
+    uint32_t minWalk = (uint32_t)(30000 * flipMod);   // Walk timer: 30s base
+    uint32_t maxWalk = (uint32_t)(75000 * flipMod);   // Walk timer: 75s base
+    uint32_t minLook = (uint32_t)(4000 * flipMod);    // Look timer: 4s base (more frequent looks)
+    uint32_t maxLook = (uint32_t)(15000 * flipMod);   // Look timer: 15s base
     
-    // Stationary behavior: LOOK around (no X change) and occasionally WALK to new position
+    // === ORGANIC RANDOM BEHAVIORS ===
     // Disable all movement while grass is moving (treadmill mode)
     if (!transitioning && !grassMoving && !pendingGrassStart) {
-        // LOOK timer - quick head turns while staying in place
-        if (now - lastLookTime > lookInterval) {
-            // 50% chance to look the other way
-            if (random(0, 2) == 0) {
-                facingRight = !facingRight;  // Instant flip, no transition
-            }
-            lastLookTime = now;
-            lookInterval = random(minLook, maxLook);
-        }
         
-        // WALK timer - move to new position on screen
-        if (now - lastFlipTime > flipInterval) {
-            // Decide new position (opposite side)
-            bool goToRightSide = !onRightSide;
-            // Face direction of travel during walk
-            bool faceDirectionDuringWalk = goToRightSide;  // Face right if going right
+        // --- LOOK BEHAVIOR: Random glances with personality ---
+        if (now - lastLookTime > lookInterval) {
+            int lookRoll = random(0, 100);
             
-            // Start walk transition
-            transitioning = true;
-            transitionStartTime = now;
-            transitionFromX = currentX;
-            transitionToX = goToRightSide ? 130 : 2;  // Right side or left side
-            transitionToFacingRight = faceDirectionDuringWalk;
+            if (lookRoll < 35) {
+                // 35%: Simple head turn
+                facingRight = !facingRight;
+            } else if (lookRoll < 55) {
+                // 20%: Look one way, then back (curious double-take)
+                facingRight = !facingRight;
+                // Schedule a quick look-back by shortening next interval
+                lookInterval = random(800, 1500);  // Quick follow-up
+                lastLookTime = now;
+                goto skip_look_reset;  // Don't reset with normal interval
+            } else if (lookRoll < 70) {
+                // 15%: Sniff while looking (something caught attention)
+                facingRight = random(0, 2) == 0;  // Random direction
+                sniff();
+            } else if (lookRoll < 82) {
+                // 12%: Ear wiggle (alert/listening)
+                wiggleEars();
+            } else if (lookRoll < 90) {
+                // 8%: Blink slowly (relaxed)
+                blink();
+            }
+            // 10%: Do nothing (just chill)
             
-            lastFlipTime = now;
-            flipInterval = random(minWalk, maxWalk);
+            lastLookTime = now;
+            // Vary the interval more - sometimes rapid, sometimes long pauses
+            if (random(0, 5) == 0) {
+                lookInterval = random(1500, 4000);  // 20% chance: quick succession
+            } else {
+                lookInterval = random(minLook, maxLook);
+            }
         }
+        skip_look_reset:
+        
+        // --- WALK BEHAVIOR: Always stay at LEFT/RIGHT edges for bubble positioning ---
+        // Pig should ALWAYS be at edges where bubble can float beside, never in center
+        if (now - lastFlipTime > flipInterval) {
+            int walkRoll = random(0, 100);
+            int targetX;
+            
+            // Define edge zones (bubble floats beside pig, not above)
+            const int LEFT_EDGE = 20;   // Left rest position
+            const int RIGHT_EDGE = 108; // Right rest position
+            
+            if (walkRoll < 50) {
+                // 50%: Walk to opposite edge (primary behavior)
+                targetX = onRightSide ? LEFT_EDGE : RIGHT_EDGE;
+            } else if (walkRoll < 85) {
+                // 35%: Walk to random edge (left or right)
+                targetX = random(0, 2) == 0 ? LEFT_EDGE : RIGHT_EDGE;
+            } else if (walkRoll < 95) {
+                // 10%: Short shuffle within current edge zone
+                if (onRightSide) {
+                    targetX = random(85, 108);  // Stay in right zone
+                } else {
+                    targetX = random(20, 45);   // Stay in left zone
+                }
+            } else {
+                // 5%: Stay put, just turn around (fake walk)
+                facingRight = !facingRight;
+                lastFlipTime = now;
+                flipInterval = random(minWalk / 2, maxWalk / 2);
+                goto skip_walk;
+            }
+            
+            // Only walk if destination is different enough (avoid micro-movements)
+            if (abs(targetX - currentX) > 15) {
+                bool goingRight = targetX > currentX;
+                
+                transitioning = true;
+                transitionStartTime = now;
+                transitionFromX = currentX;
+                transitionToX = targetX;
+                transitionToFacingRight = goingRight;  // Face direction of travel
+                
+                lastFlipTime = now;
+                // Vary wait time more randomly
+                if (random(0, 4) == 0) {
+                    flipInterval = random(15000, 30000);  // 25% chance: shorter wait
+                } else {
+                    flipInterval = random(minWalk, maxWalk);
+                }
+            } else {
+                // Destination too close, just look that way instead
+                facingRight = targetX > currentX;
+                lastFlipTime = now;
+                flipInterval = random(minWalk / 3, minWalk);
+            }
+        }
+        skip_walk:;
     }
     
     // Select frame based on state and direction (blink modifies eye only, not ears)
@@ -333,9 +479,14 @@ void Avatar::draw(M5Canvas& canvas) {
 }
 
 void Avatar::drawFrame(M5Canvas& canvas, const char** frame, uint8_t lines, bool blink, bool faceRight, bool sniff) {
+    // Star system background layer (behind pig)
+    updateStars();
+    drawStars(canvas);
+    fillPigBoundingBox(canvas);
+
     canvas.setTextDatum(top_left);
     canvas.setTextSize(3);
-    canvas.setTextColor(COLOR_ACCENT);
+    canvas.setTextColor(getDrawColor());  // Thunder-aware color
     
     uint32_t now = millis();
     
@@ -345,20 +496,37 @@ void Avatar::drawFrame(M5Canvas& canvas, const char** frame, uint8_t lines, bool
         attackShakeStrong = false;
     }
     
-    // Calculate vertical shake offset
+    // Handle cute jump timeout
+    if (jumpActive && (now - jumpStartTime > JUMP_DURATION_MS)) {
+        jumpActive = false;
+    }
+    
+    // Calculate vertical shake/jump offset
     int shakeY = 0;
-    if (attackShakeActive) {
-        // Combat shake: random ±4px (normal) / ±6px (strong) - best practices §33
+    if (jumpActive) {
+        // Cute jump: smooth arc up and down (sine-like)
+        // First half: go up, second half: come down
+        uint32_t elapsed = now - jumpStartTime;
+        float t = (float)elapsed / (float)JUMP_DURATION_MS;  // 0.0 to 1.0
+        // Parabolic arc: peaks at t=0.5
+        float arc = 4.0f * t * (1.0f - t);  // 0 → 1 → 0
+        shakeY = -(int)(arc * JUMP_HEIGHT);  // Negative = up
+    } else if (attackShakeActive) {
+        // Combat shake: random ±4px (normal) / ±6px (strong)
         const int amp = attackShakeStrong ? 6 : 4;
         shakeY = (esp_random() % 2 == 0) ? amp : -amp;
     } else if (transitioning || grassMoving) {
-        // Walk bounce: 2px at 100ms intervals - best practices §32
-        shakeY = ((now / 100) % 2 == 0) ? 2 : 0;
+        // Heavy walk bounce: 4-phase weighted pattern (heavier landing feel)
+        // Phase: down(0) → up-overshoot(-3) → settle-low(-1) → settle-mid(-2)
+        // 80ms per phase = 320ms full cycle, slower than Sirloin's snappy bounce
+        static const int bouncePattern[4] = {0, -3, -1, -2};
+        int phase = (now / 80) % 4;
+        shakeY = bouncePattern[phase];
     }
     
     // Use animated currentX position (set during transition or at rest)
     int startX = currentX;
-    int startY = 5 + shakeY;  // Apply shake offset
+    int startY = 23 + shakeY;  // Apply shake offset (shifted down for XP bar at top)
     int lineHeight = 22;
     
     for (uint8_t i = 0; i < lines; i++) {
@@ -384,21 +552,12 @@ void Avatar::drawFrame(M5Canvas& canvas, const char** frame, uint8_t lines, bool
                     strncpy(bodyLine, "(    )z", sizeof(bodyLine));  // Tail trails on right
                 }
             } else {
-                // Stationary: show tail when facing AWAY from screen center
-                // Right side + facing right = tail on left (facing away)
-                // Right side + facing left = no tail (facing center)
-                // Left side + facing left = tail on right (facing away)
-                // Left side + facing right = no tail (facing center)
-                bool facingAway = (onRightSide && faceRight) || (!onRightSide && !faceRight);
-                if (facingAway) {
-                    if (onRightSide) {
-                        strncpy(bodyLine, "z(    )", sizeof(bodyLine));  // Right side, tail on left
-                        tailOnLeft = true;
-                    } else {
-                        strncpy(bodyLine, "(    )z", sizeof(bodyLine));  // Left side, tail on right
-                    }
+                // Stationary: always show tail based on facing direction
+                if (faceRight) {
+                    strncpy(bodyLine, "z(    )", sizeof(bodyLine));  // Facing right, tail on left
+                    tailOnLeft = true;
                 } else {
-                    strncpy(bodyLine, "(    )", sizeof(bodyLine));  // Facing center, no tail
+                    strncpy(bodyLine, "(    )z", sizeof(bodyLine));  // Facing left, tail on right
                 }
             }
             bodyLine[sizeof(bodyLine) - 1] = '\0';
@@ -462,30 +621,57 @@ void Avatar::setGrassMoving(bool moving, bool directionRight) {
     }
     
     if (moving) {
+        // COOLDOWN CHECK: Don't start grass if we just stopped
+        // This prevents rapid on/off/on/off state changes from causing macarena
+        uint32_t now = millis();
+        if (lastGrassStopTime > 0 && (now - lastGrassStopTime) < GRASS_REST_COOLDOWN_MS) {
+            return;  // Still in cooldown period - pig needs rest
+        }
+        
         grassDirection = directionRight;
         
-        // Lock pig facing direction to match treadmill physics
-        // grassDirection=true: grass scrolls right, pig walks left, face LEFT
-        // grassDirection=false: grass scrolls left, pig walks right, face RIGHT
-        facingRight = !directionRight;
+        // Calculate correct treadmill position based on direction
+        // Grass RIGHT: pig at X=108 (tail margin on right)
+        // Grass LEFT: pig at X=20 (tail margin on left: 20-18=2)
+        int targetX = directionRight ? 108 : 20;
         
-        // Just start grass immediately - no transition blocking
-        // The treadmill walk effect only triggers on MODE START, not per-frame sync
-        // If pig is already transitioning, grass will start when transition ends
         if (transitioning) {
+            // Check if this is a coast-back transition (pig returning to rest at X=20)
+            // Don't interrupt coast-back with grass start - let the pig chill first
+            // This prevents the "macarena" bug where rapid state changes cause endless back-and-forth
+            if (transitionToX == 20) {
+                return;  // Coast-back in progress - pig needs a break
+            }
+            // Already sliding to grass position - queue grass
+            pendingGrassStart = true;
+            grassMoving = false;
+        } else if (currentX != targetX) {
+            // Not at correct treadmill position - slide there first
+            startWindupSlide(targetX, directionRight);  // face direction of travel
             pendingGrassStart = true;
             grassMoving = false;
         } else {
+            // Already at correct position - start grass immediately
+            facingRight = !directionRight;
             grassMoving = true;
             pendingGrassStart = false;
         }
+        
+        // Clear cooldown since we successfully started
+        lastGrassStopTime = 0;
     } else {
-        // Stop grass and coast back to resting position (X=2, facing left)
+        // Stop grass and coast back to resting position
         grassMoving = false;
         pendingGrassStart = false;
         
-        // Coast back to left edge resting position
-        startWindupSlide(2, false);  // X=2, face left when done
+        // Start cooldown timer - pig needs rest before grass can start again
+        lastGrassStopTime = millis();
+        
+        // Reset walk timer to prevent immediate post-coast walk trigger
+        lastFlipTime = millis();
+        
+        // Coast back to left resting position (X=20 for tail margin)
+        startWindupSlide(20, false);  // X=20, face left when done
     }
 }
 
@@ -543,12 +729,149 @@ void Avatar::drawGrass(M5Canvas& canvas) {
     updateGrass();
     
     canvas.setTextSize(2);  // Same as menu items
-    canvas.setTextColor(COLOR_FG);
+    canvas.setTextColor(getDrawColor());  // Thunder-aware color
     canvas.setTextDatum(top_left);
     
     // Draw at bottom of avatar area, full screen width
-    int grassY = 73;  // Below the pig face
+    int grassY = 91;  // Below the pig face (at edge of main canvas)
     canvas.drawString(grassPattern, 0, grassY);
+}
+
+// --- Night sky star system ---
+bool Avatar::isNightTime() {
+    uint32_t now = millis();
+
+    // Cache rtc reads, check every 60 seconds
+    if (now - lastNightCheck < 60000 && lastNightCheck != 0) {
+        return cachedNightMode;
+    }
+    lastNightCheck = now;
+
+    auto dt = M5.Rtc.getDateTime();
+    if (dt.date.year >= 2024) {
+        uint8_t hour = dt.time.hours;
+        cachedNightMode = (hour >= 20 || hour < 6);
+        return cachedNightMode;
+    }
+
+    time_t unixNow = time(nullptr);
+    if (unixNow >= 1700000000) {
+        struct tm timeinfo;
+        localtime_r(&unixNow, &timeinfo);
+        uint8_t hour = (uint8_t)timeinfo.tm_hour;
+        cachedNightMode = (hour >= 20 || hour < 6);
+        return cachedNightMode;
+    }
+
+    cachedNightMode = false;
+    return false;
+}
+
+bool Avatar::areStarsActive() {
+    return starsActive;
+}
+
+void Avatar::initStarPositions() {
+    // Pre-gen star positions, hide until spawn
+    for (uint8_t i = 0; i < MAX_STARS; i++) {
+        // y 20-100 sky/backdrop, bubble still wins
+        // x 5-235 near full width
+        stars[i].x = random(5, 235);
+        stars[i].y = random(20, 100);
+        stars[i].size = 1;
+        stars[i].brightness = 0;
+        stars[i].fadeInStart = 0;
+        // About 20 percent twinkle
+        stars[i].isBlinking = (random(0, 100) < 20);
+    }
+}
+
+void Avatar::updateStars() {
+    uint32_t now = millis();
+
+    // Never show stars while raining
+    if (Weather::isRaining()) {
+        if (starsActive) {
+            starsActive = false;
+            starCount = 0;
+        }
+        return;
+    }
+
+    // Night mode transition
+    bool nightNow = isNightTime();
+
+    if (nightNow && !starsActive) {
+        // Night starting, spawn sequence online
+        starsActive = true;
+        starCount = 0;
+        lastStarSpawn = now;
+        nextSpawnDelay = random(800, 4001);  // 800ms to 4s
+        initStarPositions();
+    } else if (!nightNow && starsActive) {
+        // Day starting, kill stars
+        starsActive = false;
+        starCount = 0;
+    }
+
+    if (!starsActive) return;
+
+    // Spawn new star when timer expires
+    if (starCount < MAX_STARS && (now - lastStarSpawn >= nextSpawnDelay)) {
+        stars[starCount].fadeInStart = now;
+        stars[starCount].brightness = 0;
+        starCount++;
+        lastStarSpawn = now;
+        nextSpawnDelay = random(800, 4001);
+    }
+
+    // Update visible stars, fade-in, twinkle handled in draw
+    for (uint8_t i = 0; i < starCount; i++) {
+        uint32_t age = now - stars[i].fadeInStart;
+        if (age < 500) {
+            stars[i].brightness = (age * 255) / 500;
+        } else {
+            stars[i].brightness = 255;
+        }
+    }
+}
+
+void Avatar::fillPigBoundingBox(M5Canvas& canvas) {
+    if (!starsActive || starCount == 0) return;
+
+    int boxX = currentX - 25;
+    int boxW = 155;  // covers tail + 7 chars + margin
+    int boxY = 11;   // base y (23) minus jump headroom (12)
+    int boxH = 84;   // stops above grass near y95
+
+    // Clamp to screen
+    if (boxX < 0) { boxW += boxX; boxX = 0; }
+    if (boxX + boxW > 240) boxW = 240 - boxX;
+
+    canvas.fillRect(boxX, boxY, boxW, boxH, getBGColor());
+}
+
+void Avatar::drawStars(M5Canvas& canvas) {
+    if (!starsActive || starCount == 0) return;
+
+    uint32_t now = millis();
+    uint16_t fg = getDrawColor();
+    canvas.setTextSize(1);
+    canvas.setTextColor(fg);
+    canvas.setTextDatum(top_left);
+
+    for (uint8_t i = 0; i < starCount; i++) {
+        if (stars[i].brightness < 128) continue;
+
+        char starChar = '.';
+        if (stars[i].isBlinking) {
+            uint32_t phase = (now + i * 700) % 4000;
+            if (phase >= 1700 && phase < 2300) {
+                starChar = '*';
+            }
+        }
+        canvas.drawChar(starChar, stars[i].x, stars[i].y);
+    }
 }
 
 // --- Phase 8: Direction control helpers ---
@@ -565,6 +888,15 @@ void Avatar::setAttackShake(bool active, bool strong) {
     attackShakeActive = active;
     attackShakeStrong = strong;
     attackShakeRefreshTime = active ? millis() : 0;
+}
+
+// --- Thunder flash control (weather effect) ---
+void Avatar::setThunderFlash(bool active) {
+    thunderFlashActive = active;
+}
+
+bool Avatar::isThunderFlashing() {
+    return thunderFlashActive;
 }
 
 // --- Phase 6: Windup slide for coast-back ---

@@ -7,27 +7,30 @@
 // - Per-network file writes instead of batch saves
 
 #include "warhog.h"
+#include "oink.h"
 #include "../build_info.h"
 #include "../core/config.h"
+#include "../core/wifi_utils.h"
 #include "../core/wsl_bypasser.h"
 #include "../core/sdlog.h"
 #include "../core/xp.h"
 #include "../ui/display.h"
 #include "../piglet/mood.h"
 #include "../piglet/avatar.h"
-#include "../ml/features.h"
-#include "../ml/inference.h"
+// ML disabled for heap savings
 #include <M5Cardputer.h>
 #include <WiFi.h>
 #include <SD.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <math.h>
+#include <esp_heap_caps.h>
 
 // Maximum BSSIDs tracked in seenBSSIDs set
 // Each std::set node = 24 bytes (8 byte key + 16 byte tree overhead)
 // 5000 entries = ~120KB - leaves headroom for other allocations
 static const size_t MAX_SEEN_BSSIDS = 5000;
+static const size_t SEEN_BSSID_ALLOC_MIN_BLOCK = 256;
 
 // Heap threshold for emergency cleanup (bytes)
 static const size_t HEAP_WARNING_THRESHOLD = 40000;
@@ -79,6 +82,7 @@ bool WarhogMode::running = false;
 uint32_t WarhogMode::lastScanTime = 0;
 uint32_t WarhogMode::scanInterval = 5000;
 std::set<uint64_t> WarhogMode::seenBSSIDs;
+std::set<uint64_t> WarhogMode::capturedBSSIDs;
 uint32_t WarhogMode::totalNetworks = 0;
 uint32_t WarhogMode::openNetworks = 0;
 uint32_t WarhogMode::wepNetworks = 0;
@@ -123,6 +127,7 @@ static void writeCSVField(File& f, const char* ssid) {
 
 void WarhogMode::init() {
     seenBSSIDs.clear();
+    capturedBSSIDs.clear();
     totalNetworks = 0;
     openNetworks = 0;
     wepNetworks = 0;
@@ -133,8 +138,8 @@ void WarhogMode::init() {
     currentMLFilename = "";
     currentWigleFilename = "";
     
-    // Check if Enhanced ML mode is enabled
-    enhancedMode = (Config::ml().collectionMode == MLCollectionMode::ENHANCED);
+    // ML disabled for heap savings
+    enhancedMode = false;
     // Guard beacon map in case callback still registered from abnormal shutdown
     beaconMapBusy = true;
     beaconFeatures.clear();
@@ -142,18 +147,14 @@ void WarhogMode::init() {
     beaconCount = 0;
     
     scanInterval = Config::gps().updateInterval * 1000;
-    
-    Serial.printf("[WARHOG] Initialized (ML Mode: %s)\n", 
-                  enhancedMode ? "Enhanced" : "Basic");
 }
 
 void WarhogMode::start() {
     if (running) return;
     
-    Serial.println("[WARHOG] Starting...");
-    
     // Clear previous session data
     seenBSSIDs.clear();
+    capturedBSSIDs.clear();
     totalNetworks = 0;
     openNetworks = 0;
     wepNetworks = 0;
@@ -177,17 +178,15 @@ void WarhogMode::start() {
     
     // Reload scan interval from config
     scanInterval = Config::gps().updateInterval * 1000;
-    Serial.printf("[WARHOG] Scan interval: %lu ms\n", scanInterval);
     
     // Reset stop flag for clean start
     stopRequested = false;
     
-    // Check if Enhanced ML mode is enabled (might have changed in settings)
-    enhancedMode = (Config::ml().collectionMode == MLCollectionMode::ENHANCED);
+    // ML disabled for heap savings
+    enhancedMode = false;
     
     // Full WiFi reinitialization for clean slate
     WiFi.disconnect(true);  // Disconnect and clear settings
-    WiFi.mode(WIFI_OFF);    // Turn off WiFi completely
     delay(200);             // Let it settle
     WiFi.mode(WIFI_STA);    // Station mode for scanning
     
@@ -202,12 +201,7 @@ void WarhogMode::start() {
     scanInProgress = false;
     scanStartTime = 0;
     
-    Serial.println("[WARHOG] WiFi initialized in STA mode");
-    
-    // If Enhanced mode, start promiscuous capture for beacons
-    if (enhancedMode) {
-        startEnhancedCapture();
-    }
+    // ML features disabled
     
     // Wake up GPS
     GPS::wake();
@@ -217,19 +211,15 @@ void WarhogMode::start() {
     
     // Set grass speed for wardriving - animation controlled by GPS lock in update()
     Avatar::setGrassSpeed(200);  // Slower than OINK (~5 FPS)
-    Avatar::startWindupSlide(108, true);  // Slide to right position (same as sirloin hunt)
     Avatar::setGrassMoving(GPS::hasFix());  // Start based on current GPS status
     
     Display::setWiFiStatus(true);
     Mood::onWarhogUpdate();  // Show WARHOG phrase on start
-    Serial.printf("[WARHOG] Running (ML Mode: %s)\n", 
-                  enhancedMode ? "Enhanced" : "Basic");
+    Mood::setDialogueLock(true);
 }
 
 void WarhogMode::stop() {
     if (!running) return;
-    
-    Serial.println("[WARHOG] Stopping...");
     
     // Signal task to stop gracefully
     stopRequested = true;
@@ -241,14 +231,12 @@ void WarhogMode::stop() {
     
     // Wait briefly for background scan to notice stopRequested
     if (scanInProgress && scanTaskHandle != NULL) {
-        Serial.println("[WARHOG] Waiting for background scan to finish...");
         // Give task up to 500ms to exit gracefully
         for (int i = 0; i < 10 && scanTaskHandle != NULL; i++) {
             delay(50);
         }
         // Force cleanup if task didn't exit in time
         if (scanTaskHandle != NULL) {
-            Serial.println("[WARHOG] Force-cancelling background scan...");
             vTaskDelete(scanTaskHandle);
             scanTaskHandle = NULL;
         }
@@ -263,30 +251,23 @@ void WarhogMode::stop() {
     
     running = false;
     
-    // Log final statistics
-    Serial.printf("[WARHOG] Session complete - Total: %lu, Geotagged: %lu, ML-only: %lu\n",
-                  totalNetworks, savedCount, mlOnlyCount);
-    
     // Put GPS to sleep if power management enabled
     if (Config::gps().powerSave) {
         GPS::sleep();
     }
     
+    WiFiUtils::shutdown();
     Display::setWiFiStatus(false);
     
     // Reset stop flag for next run
     stopRequested = false;
-    
-    Serial.println("[WARHOG] Stopped");
+    Mood::setDialogueLock(false);
 }
 
 // Background task for WiFi scanning - runs sync scan without blocking main loop
 void WarhogMode::scanTask(void* pvParameters) {
-    Serial.println("[WARHOG] Scan task starting sync scan...");
-    
     // Check for early abort request
     if (shouldAbortScan()) {
-        Serial.println("[WARHOG] Scan task: abort requested before start");
         scanResult = -2;
         scanTaskHandle = NULL;
         vTaskDelete(NULL);
@@ -296,12 +277,10 @@ void WarhogMode::scanTask(void* pvParameters) {
     // Do full WiFi reset for reliable scanning
     WiFi.scanDelete();
     WiFi.disconnect(true);
-    WiFi.mode(WIFI_OFF);
-    vTaskDelay(pdMS_TO_TICKS(100));
+        vTaskDelay(pdMS_TO_TICKS(100));
     
     // Check abort between WiFi operations
     if (shouldAbortScan()) {
-        Serial.println("[WARHOG] Scan task: abort requested during reset");
         scanResult = -2;
         scanTaskHandle = NULL;
         vTaskDelete(NULL);
@@ -313,8 +292,6 @@ void WarhogMode::scanTask(void* pvParameters) {
     
     // Sync scan - this blocks until complete (which is fine in background task)
     int result = WiFi.scanNetworks(false, true);  // sync, show hidden
-    
-    Serial.printf("[WARHOG] Scan task got %d networks\n", result);
     
     // Store result for main loop to pick up
     scanResult = result;
@@ -330,15 +307,11 @@ void WarhogMode::scanTask(void* pvParameters) {
         esp_err_t err1 = esp_wifi_set_promiscuous_filter(&filter);
         esp_wifi_set_promiscuous_rx_cb(promiscuousCallback);
         esp_err_t err2 = esp_wifi_set_promiscuous(true);
-        
-        if (err1 != ESP_OK || err2 != ESP_OK) {
-            Serial.printf("[WARHOG] Promisc re-enable failed: filter=%d, enable=%d\n", err1, err2);
-        }
     }
     
-    // Clean up task handle
+    // Clean up task handle and self-delete
     scanTaskHandle = NULL;
-    vTaskDelete(NULL);  // Self-delete
+    vTaskDelete(NULL);
 }
 
 void WarhogMode::update() {
@@ -352,11 +325,8 @@ void WarhogMode::update() {
     // Periodic heap monitoring (every 30 seconds)
     if (now - lastHeapCheck >= 30000) {
         uint32_t freeHeap = ESP.getFreeHeap();
-        Serial.printf("[WARHOG] Heap: %lu free, SeenBSSIDs: %lu, BeaconCache: %lu\n",
-                      freeHeap, seenBSSIDs.size(), beaconFeatures.size());
         
         if (freeHeap < HEAP_CRITICAL_THRESHOLD) {
-            Serial.println("[WARHOG] CRITICAL: Low heap! Emergency cleanup...");
             Display::showToast("LOW MEMORY!");
             // Emergency: clear tracking data to prevent crash
             // Guard beacon map from promiscuous callback during clear
@@ -364,8 +334,6 @@ void WarhogMode::update() {
             seenBSSIDs.clear();
             beaconFeatures.clear();
             beaconMapBusy = false;
-        } else if (freeHeap < HEAP_WARNING_THRESHOLD) {
-            Serial.println("[WARHOG] WARNING: Heap getting low");
         }
         lastHeapCheck = now;
     }
@@ -375,9 +343,6 @@ void WarhogMode::update() {
     if (hasGPSFix != lastGPSState) {
         Avatar::setGrassMoving(hasGPSFix);
         lastGPSState = hasGPSFix;
-        Serial.printf("[WARHOG] GPS %s - grass %s\n", 
-                      hasGPSFix ? "locked" : "lost", 
-                      hasGPSFix ? "moving" : "stopped");
     }
     
     // Distance tracking for XP (every 5 seconds when GPS is available)
@@ -405,18 +370,14 @@ void WarhogMode::update() {
     if (scanInProgress) {
         if (scanResult >= 0) {
             // Scan done
-            Serial.printf("[WARHOG] Background scan complete: %d networks in %lu ms\n", 
-                         scanResult, millis() - scanStartTime);
             scanInProgress = false;
             processScanResults();
             scanResult = -2;  // Reset for next scan
         } else if (scanTaskHandle == NULL && scanResult == -2) {
             // Task ended but no result - something went wrong
-            Serial.println("[WARHOG] Background scan task ended unexpectedly");
             scanInProgress = false;
         } else if (now - scanStartTime > 20000) {
             // Timeout after 20 seconds
-            Serial.println("[WARHOG] Background scan timeout");
             if (scanTaskHandle != NULL) {
                 vTaskDelete(scanTaskHandle);
                 scanTaskHandle = NULL;
@@ -450,8 +411,6 @@ void WarhogMode::performScan() {
     if (scanInProgress) return;
     if (scanTaskHandle != NULL) return;  // Previous task still running
     
-    Serial.println("[WARHOG] Starting background WiFi scan...");
-    
     // Temporarily disable promiscuous mode for scanning (conflicts with scan API)
     if (enhancedMode) {
         esp_wifi_set_promiscuous(false);
@@ -473,8 +432,12 @@ void WarhogMode::performScan() {
     );
     
     if (scanTaskHandle == NULL) {
-        Serial.println("[WARHOG] Failed to create scan task");
+        // Fallback: run sync scan on main thread if task creation fails
         scanInProgress = false;
+        scanResult = WiFi.scanNetworks(false, true);
+        if (scanResult >= 0) {
+            processScanResults();
+        }
         scanResult = -2;
     }
 }
@@ -486,7 +449,6 @@ bool WarhogMode::ensureCSVFileReady() {
     // Ensure wardriving directory exists
     if (!SD.exists("/wardriving")) {
         if (!SD.mkdir("/wardriving")) {
-            Serial.println("[WARHOG] Failed to create /wardriving directory");
             return false;
         }
     }
@@ -495,7 +457,6 @@ bool WarhogMode::ensureCSVFileReady() {
     
     File f = openFileWithRetry(currentFilename.c_str(), FILE_WRITE);
     if (!f) {
-        Serial.printf("[WARHOG] Failed to create CSV: %s\n", currentFilename.c_str());
         currentFilename = "";
         return false;
     }
@@ -503,7 +464,6 @@ bool WarhogMode::ensureCSVFileReady() {
     f.println("BSSID,SSID,RSSI,Channel,AuthMode,Latitude,Longitude,Altitude,Timestamp");
     f.close();
     
-    Serial.printf("[WARHOG] Created CSV: %s\n", currentFilename.c_str());
     return true;
 }
 
@@ -514,7 +474,6 @@ bool WarhogMode::ensureMLFileReady() {
     // Ensure mldata directory exists
     if (!SD.exists("/mldata")) {
         if (!SD.mkdir("/mldata")) {
-            Serial.println("[WARHOG] Failed to create /mldata directory");
             return false;
         }
     }
@@ -525,7 +484,6 @@ bool WarhogMode::ensureMLFileReady() {
     
     File f = openFileWithRetry(currentMLFilename.c_str(), FILE_WRITE);
     if (!f) {
-        Serial.printf("[WARHOG] Failed to create ML file: %s\n", currentMLFilename.c_str());
         currentMLFilename = "";
         return false;
     }
@@ -541,7 +499,6 @@ bool WarhogMode::ensureMLFileReady() {
     f.println("label,latitude,longitude");
     f.close();
     
-    Serial.printf("[WARHOG] Created ML file: %s\n", currentMLFilename.c_str());
     return true;
 }
 
@@ -605,7 +562,6 @@ void WarhogMode::checkWigleFileRotation() {
     f.close();
     
     if (fileSize >= WIGLE_FILE_MAX_SIZE) {
-        Serial.printf("[WARHOG] WiGLE file rotated at %d bytes\n", fileSize);
         currentWigleFilename = "";  // Force new file creation on next append
     }
 }
@@ -620,7 +576,6 @@ bool WarhogMode::ensureWigleFileReady() {
     // Ensure wardriving directory exists
     if (!SD.exists("/wardriving")) {
         if (!SD.mkdir("/wardriving")) {
-            Serial.println("[WARHOG] Failed to create /wardriving directory");
             return false;
         }
     }
@@ -629,7 +584,6 @@ bool WarhogMode::ensureWigleFileReady() {
     
     File f = openFileWithRetry(currentWigleFilename.c_str(), FILE_WRITE);
     if (!f) {
-        Serial.printf("[WARHOG] Failed to create WiGLE CSV: %s\n", currentWigleFilename.c_str());
         currentWigleFilename = "";
         return false;
     }
@@ -647,7 +601,6 @@ bool WarhogMode::ensureWigleFileReady() {
     f.println("MAC,SSID,AuthMode,FirstSeen,Channel,Frequency,RSSI,CurrentLatitude,CurrentLongitude,AltitudeMeters,AccuracyMeters,RCOIs,MfgrId,Type");
     f.close();
     
-    Serial.printf("[WARHOG] Created WiGLE CSV: %s\n", currentWigleFilename.c_str());
     return true;
 }
 
@@ -739,7 +692,6 @@ void WarhogMode::processScanResults() {
     int n = scanResult;
     
     if (n < 0) {
-        Serial.println("[WARHOG] No valid scan results");
         WiFi.scanDelete();
         return;
     }
@@ -769,7 +721,10 @@ void WarhogMode::processScanResults() {
         
         // Add to seen set immediately (before any file writes)
         if (seenBSSIDs.size() < MAX_SEEN_BSSIDS) {
-            seenBSSIDs.insert(bssidKey);
+            size_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+            if (largest >= SEEN_BSSID_ALLOC_MIN_BLOCK) {
+                seenBSSIDs.insert(bssidKey);
+            }
         }
         
         // Extract network info
@@ -847,10 +802,6 @@ void WarhogMode::processScanResults() {
                 }
             }
         }
-        
-        Serial.printf("[WARHOG] New: %s (ch%d, %s)%s\n",
-                     ssid, channel, authModeToString(authmode).c_str(),
-                     hasGPS ? " [GPS]" : "");
     }
     
     // Release beacon map guard
@@ -883,8 +834,7 @@ GPSData WarhogMode::getGPSData() {
 
 bool WarhogMode::exportCSV(const char* path) {
     // Data is already in currentFilename as CSV
-    // This function would copy/rename, but for now just log
-    Serial.printf("[WARHOG] CSV data already in: %s\n", currentFilename.c_str());
+    // This function would copy/rename, but for now just return status
     return currentFilename.length() > 0;
 }
 
@@ -906,7 +856,6 @@ static String escapeXML(const char* str) {
 
 bool WarhogMode::exportMLTraining(const char* path) {
     // ML data is already on disk in currentMLFilename
-    Serial.printf("[WARHOG] ML data already in: %s\n", currentMLFilename.c_str());
     return currentMLFilename.length() > 0;
 }
 
@@ -921,6 +870,56 @@ String WarhogMode::authModeToString(wifi_auth_mode_t mode) {
         case WIFI_AUTH_WPA2_WPA3_PSK: return "WPA2/WPA3";
         case WIFI_AUTH_WAPI_PSK: return "WAPI";
         default: return "UNKNOWN";
+    }
+}
+
+// === BOUNTY SYSTEM (Phase 5) ===
+// Track which BSSIDs were actually captured (handshakes/PMKIDs) so Papa only sends misses
+void WarhogMode::markCaptured(const uint8_t* bssid) {
+    if (!bssid) return;
+    if (capturedBSSIDs.size() >= MAX_SEEN_BSSIDS) return;
+    
+    uint64_t key = bssidToKey(bssid);
+    capturedBSSIDs.insert(key);
+}
+
+std::vector<uint64_t> WarhogMode::getUnclaimedBSSIDs() {
+    // Start with captured set populated by Oink events
+    std::set<uint64_t> captured = capturedBSSIDs;
+    
+    // Add any captures currently in Oink buffers (ensures we exclude saved loot too)
+    for (const auto& hs : OinkMode::getHandshakes()) {
+        captured.insert(bssidToKey(hs.bssid));
+    }
+    for (const auto& p : OinkMode::getPMKIDs()) {
+        captured.insert(bssidToKey(p.bssid));
+    }
+    
+    std::vector<uint64_t> unclaimed;
+    unclaimed.reserve(seenBSSIDs.size());
+    for (uint64_t seen : seenBSSIDs) {
+        if (captured.find(seen) == captured.end()) {
+            unclaimed.push_back(seen);
+        }
+    }
+    return unclaimed;
+}
+
+void WarhogMode::buildBountyList(uint8_t* buffer, uint8_t* count) {
+    if (!buffer || !count) return;
+    
+    auto unclaimed = getUnclaimedBSSIDs();
+    *count = 0;
+    
+    for (uint64_t key : unclaimed) {
+        if (*count >= MAX_BOUNTIES) break;  // Max 15 bounties
+        buffer[*count * 6 + 0] = (key >> 40) & 0xFF;
+        buffer[*count * 6 + 1] = (key >> 32) & 0xFF;
+        buffer[*count * 6 + 2] = (key >> 24) & 0xFF;
+        buffer[*count * 6 + 3] = (key >> 16) & 0xFF;
+        buffer[*count * 6 + 4] = (key >> 8) & 0xFF;
+        buffer[*count * 6 + 5] = key & 0xFF;
+        (*count)++;
     }
 }
 
@@ -986,8 +985,6 @@ void WarhogMode::promiscuousCallback(void* buf, wifi_promiscuous_pkt_type_t type
 }
 
 void WarhogMode::startEnhancedCapture() {
-    Serial.println("[WARHOG] Starting Enhanced ML capture (promiscuous mode)");
-    
     beaconFeatures.clear();
     beaconCount = 0;
     
@@ -998,16 +995,8 @@ void WarhogMode::startEnhancedCapture() {
     esp_wifi_set_promiscuous_filter(&filter);
     esp_wifi_set_promiscuous_rx_cb(promiscuousCallback);
     esp_wifi_set_promiscuous(true);
-    
-    Serial.println("[WARHOG] Promiscuous mode enabled for beacon capture");
 }
 
 void WarhogMode::stopEnhancedCapture() {
-    Serial.println("[WARHOG] Stopping Enhanced ML capture");
-    
-    esp_wifi_set_promiscuous(false);
-    esp_wifi_set_promiscuous_rx_cb(nullptr);
-    
-    Serial.printf("[WARHOG] Captured %d beacons from %d BSSIDs\n", 
-                  beaconCount, beaconFeatures.size());
+    WiFiUtils::stopPromiscuous();
 }

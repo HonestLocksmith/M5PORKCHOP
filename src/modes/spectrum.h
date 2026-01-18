@@ -41,6 +41,14 @@ inline bool macEqual(const uint8_t* a, const uint8_t* b) {
     return memcmp(a, b, 6) == 0;
 }
 
+// Filter modes for target selection
+enum class SpectrumFilter : uint8_t {
+    ALL = 0,   // Show all networks
+    VULN,      // OPEN/WEP/WPA only (weak security)
+    SOFT,      // No PMF (deauth-able)
+    HIDDEN     // Hidden SSIDs only
+};
+
 class SpectrumMode {
 public:
     static void init();
@@ -54,7 +62,7 @@ public:
     static void onBeacon(const uint8_t* bssid, uint8_t channel, int8_t rssi, const char* ssid, wifi_auth_mode_t authmode, bool hasPMF, bool isProbeResponse);
     
     // Bottom bar info
-    static String getSelectedInfo();
+    static void getSelectedInfo(char* out, size_t len);
     
     // Client monitoring accessors [P3]
     static bool isMonitoring() { return monitoringNetwork; }
@@ -75,9 +83,16 @@ private:
     static uint32_t lastHopTime;     // Last channel hop time
     static uint32_t startTime;       // When mode started (for achievement)
     
+    // Filter state
+    static SpectrumFilter filter;    // Current filter mode
+    
     // Deferred logging for revealed SSIDs (avoid Serial in callback)
     static volatile bool pendingReveal;
     static char pendingRevealSSID[33];
+    
+    // Deferred network add (avoid push_back in callback - ESP32 dual-core race)
+    static volatile bool pendingNetworkAdd;
+    static SpectrumNetwork pendingNetwork;
     
     // Client monitoring state [P1] [P2]
     static bool monitoringNetwork;       // True when locked on network
@@ -100,6 +115,24 @@ private:
     static bool clientDetailActive;          // Detail popup visible
     static uint8_t detailClientMAC[6];       // MAC of client being viewed (close if changes)
     
+    // Reveal mode state (broadcast deauth to discover clients)
+    static bool revealingClients;            // True when in reveal mode
+    static uint32_t revealStartTime;         // When reveal mode started
+    static uint32_t lastRevealBurst;         // Last broadcast deauth time
+    
+    // Dial mode state (tilt-to-tune when device upright)
+    static bool dialMode;                    // Auto-enabled when UPS (upright)
+    static bool dialLocked;                  // Channel lock (space toggles)
+    static bool dialWasUpright;              // Hysteresis state for FLT/UPS detection
+    static uint8_t dialChannel;              // Current dial channel (1-13)
+    static float dialPositionTarget;         // Raw gyro position (1.0-13.0)
+    static float dialPositionSmooth;         // Lerped display position (smooth)
+    static uint32_t lastDialUpdate;          // Timing for lerp
+    static uint32_t dialModeEntryTime;       // When dial mode was entered (debounce)
+    static volatile uint32_t ppsCounter;     // Packet counter (callback increments)
+    static uint32_t displayPps;              // Displayed pps (updated per second)
+    static uint32_t lastPpsUpdate;           // Last pps calculation time
+    
     static void handleInput();
     static void handleClientMonitorInput();  // Input when monitoring
     static void drawSpectrum(M5Canvas& canvas);
@@ -108,13 +141,19 @@ private:
     static void drawGaussianLobe(M5Canvas& canvas, float centerFreqMHz, int8_t rssi, bool filled);
     static void drawAxis(M5Canvas& canvas);
     static void drawChannelMarkers(M5Canvas& canvas);
+    static void drawFilterBar(M5Canvas& canvas);     // Filter indicator bar
+    static void drawDialInfo(M5Canvas& canvas);      // Dial mode info bar
     static void pruneStale();            // Remove networks not seen recently
     static void pruneStaleClients();     // Remove clients not seen recently
+    static void updateDialChannel();     // Update dial mode tilt-to-tune
     
     // Client monitoring control
     static void enterClientMonitor();    // Enter overlay mode
     static void exitClientMonitor();     // Return to spectrum
-    static void deauthClient(int idx);  // Send deauth burst to selected client
+    static void deauthClient(int idx);   // Send deauth burst to selected client
+    static void enterRevealMode();       // Start broadcast deauth to discover clients
+    static void exitRevealMode();        // Stop reveal mode
+    static void updateRevealMode();      // Send periodic broadcast deauths
     
     // Data frame processing
     static void processDataFrame(const uint8_t* payload, uint16_t len, int8_t rssi);
@@ -129,6 +168,7 @@ private:
     static bool isVulnerable(wifi_auth_mode_t mode);
     static const char* authModeToShortString(wifi_auth_mode_t mode);
     static bool detectPMF(const uint8_t* payload, uint16_t len);
+    static bool matchesFilter(const SpectrumNetwork& net);  // Check if network passes filter
     
     // Promiscuous mode
     static void promiscuousCallback(void* buf, wifi_promiscuous_pkt_type_t type);

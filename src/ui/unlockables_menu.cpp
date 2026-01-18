@@ -6,6 +6,7 @@
 #include "display.h"
 #include "../core/xp.h"
 #include "../piglet/mood.h"
+#include <string.h>
 
 // Static member initialization
 uint8_t UnlockablesMenu::selectedIndex = 0;
@@ -133,7 +134,6 @@ void UnlockablesMenu::handleInput() {
         // Check if already unlocked
         if (XP::hasUnlockable(UNLOCKABLES[selectedIndex].bitIndex)) {
             Display::showToast("ALREADY YOURS");
-            delay(500);
         } else {
             // Enter text input mode
             textEditing = true;
@@ -142,8 +142,8 @@ void UnlockablesMenu::handleInput() {
         }
     }
     
-    // Exit with backtick
-    if (M5Cardputer.Keyboard.isKeyPressed('`') || M5Cardputer.Keyboard.isKeyPressed(KEY_BACKSPACE)) {
+    // Backspace - go back
+    if (M5Cardputer.Keyboard.isKeyPressed(KEY_BACKSPACE)) {
         exitRequested = true;
         hide();
     }
@@ -193,8 +193,7 @@ void UnlockablesMenu::handleTextInput() {
             Display::showToast("WRONG");
             Mood::adjustHappiness(-20);  // Sad pig
         }
-        delay(500);
-        
+
         textEditing = false;
         textBuffer = "";
         return;
@@ -304,11 +303,24 @@ void UnlockablesMenu::drawTextInput(M5Canvas& canvas) {
     canvas.drawString("ENTER THE KEY", canvas.width() / 2, boxY + 6);
     
     // Input field (show what they're typing)
-    String displayText = textBuffer;
-    if (displayText.length() > 20) {
-        displayText = "..." + displayText.substring(displayText.length() - 17);
+    char displayText[24];
+    const char* textSrc = textBuffer.c_str();
+    size_t textLen = textBuffer.length();
+    if (textLen > 20) {
+        const char* tail = textSrc + (textLen - 17);
+        snprintf(displayText, sizeof(displayText), "...%s", tail);
+    } else {
+        strncpy(displayText, textSrc, sizeof(displayText) - 2);
+        displayText[sizeof(displayText) - 2] = '\0';
     }
-    displayText += "_";  // Cursor
+    size_t dlen = strlen(displayText);
+    if (dlen + 1 < sizeof(displayText)) {
+        displayText[dlen] = '_';
+        displayText[dlen + 1] = '\0';
+    } else {
+        displayText[sizeof(displayText) - 2] = '_';
+        displayText[sizeof(displayText) - 1] = '\0';
+    }
     canvas.drawString(displayText, canvas.width() / 2, boxY + 26);
     
     canvas.setTextDatum(top_left);

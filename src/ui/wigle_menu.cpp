@@ -3,9 +3,13 @@
 #include "wigle_menu.h"
 #include <M5Cardputer.h>
 #include <SD.h>
+#include <string.h>
 #include "display.h"
 #include "../web/wigle.h"
 #include "../core/config.h"
+
+// For heap statistics logging
+#include <esp_heap_caps.h>
 
 // Static member initialization
 std::vector<WigleFileInfo> WigleMenu::files;
@@ -17,6 +21,102 @@ bool WigleMenu::detailViewActive = false;
 bool WigleMenu::nukeConfirmActive = false;
 bool WigleMenu::connectingWiFi = false;
 bool WigleMenu::uploadingFile = false;
+
+TaskHandle_t WigleMenu::uploadTaskHandle = nullptr;
+volatile bool WigleMenu::uploadTaskDone = false;
+volatile bool WigleMenu::uploadTaskSuccess = false;
+uint8_t WigleMenu::uploadTaskIndex = 0;
+char WigleMenu::uploadTaskResultMsg[64] = {0};
+
+static void formatDisplayName(const String& filename, char* out, size_t len, size_t maxChars,
+                              const char* ellipsis, bool stripDecorators) {
+    if (!out || len == 0) return;
+    out[0] = '\0';
+    if (len == 0) return;
+
+    const char* name = filename.c_str();
+    size_t total = strlen(name);
+    size_t start = 0;
+    size_t end = total;
+
+    if (stripDecorators) {
+        if (total >= 7 && strncmp(name, "warhog_", 7) == 0) start = 7;
+        const char* suffix = ".wigle.csv";
+        const size_t suffixLen = 10;
+        if (total >= suffixLen && strcmp(name + total - suffixLen, suffix) == 0) {
+            end = total - suffixLen;
+        }
+    }
+
+    if (end < start) end = start;
+    size_t avail = end - start;
+    if (avail == 0) return;
+
+    size_t limit = maxChars;
+    if (limit >= len) limit = len - 1;
+    if (limit == 0) return;
+
+    size_t ellLen = (ellipsis ? strlen(ellipsis) : 0);
+    bool truncated = avail > limit;
+    size_t copyLen = avail;
+    if (truncated) {
+        copyLen = (limit > ellLen) ? (limit - ellLen) : limit;
+    }
+    if (copyLen >= len) copyLen = len - 1;
+    memcpy(out, name + start, copyLen);
+    if (truncated && ellipsis && ellLen > 0 && (copyLen + ellLen) < len) {
+        memcpy(out + copyLen, ellipsis, ellLen);
+        out[copyLen + ellLen] = '\0';
+    } else {
+        out[copyLen] = '\0';
+    }
+}
+
+void WigleMenu::uploadTaskFn(void* pv) {
+    UploadTaskCtx* ctx = reinterpret_cast<UploadTaskCtx*>(pv);
+
+    // Run WiFi + TLS from a dedicated task with a large stack.
+    // This avoids stack canary panics from mbedTLS handshake inside loopTask.
+
+    bool weConnected = false;
+    if (!WiGLE::isConnected()) {
+        connectingWiFi = true;
+        if (!WiGLE::connect()) {
+            strncpy(uploadTaskResultMsg, WiGLE::getLastError(), sizeof(uploadTaskResultMsg) - 1);
+            uploadTaskResultMsg[sizeof(uploadTaskResultMsg) - 1] = '\0';
+            uploadTaskSuccess = false;
+            uploadTaskDone = true;
+            connectingWiFi = false;
+            delete ctx;
+            vTaskDelete(nullptr);
+            return;
+        }
+        weConnected = true;
+        connectingWiFi = false;
+    }
+
+    uploadingFile = true;
+    bool ok = WiGLE::uploadFile(ctx->fullPath);
+    uploadingFile = false;
+
+    if (weConnected) {
+        WiGLE::disconnect();
+    }
+
+    uploadTaskIndex = ctx->index;
+    uploadTaskSuccess = ok;
+    if (ok) {
+        strncpy(uploadTaskResultMsg, "UPLOAD OK!", sizeof(uploadTaskResultMsg) - 1);
+    } else {
+        strncpy(uploadTaskResultMsg, WiGLE::getLastError(), sizeof(uploadTaskResultMsg) - 1);
+    }
+    uploadTaskResultMsg[sizeof(uploadTaskResultMsg) - 1] = '\0';
+
+    uploadTaskDone = true;
+
+    delete ctx;
+    vTaskDelete(nullptr);
+}
 
 void WigleMenu::init() {
     files.clear();
@@ -127,7 +227,7 @@ void WigleMenu::handleInput() {
             return;
         }
         if (M5Cardputer.Keyboard.isKeyPressed('n') || M5Cardputer.Keyboard.isKeyPressed('N') ||
-            M5Cardputer.Keyboard.isKeyPressed('`') || M5Cardputer.Keyboard.isKeyPressed(KEY_BACKSPACE)) {
+            M5Cardputer.Keyboard.isKeyPressed(KEY_BACKSPACE)) {
             nukeConfirmActive = false;  // Cancel
             Display::clearBottomOverlay();
             return;
@@ -140,8 +240,8 @@ void WigleMenu::handleInput() {
         return;
     }
     
-    // Backtick or Backspace - exit menu
-    if (M5Cardputer.Keyboard.isKeyPressed('`') || M5Cardputer.Keyboard.isKeyPressed(KEY_BACKSPACE)) {
+    // Backspace - go back
+    if (M5Cardputer.Keyboard.isKeyPressed(KEY_BACKSPACE)) {
         hide();
         return;
     }
@@ -178,8 +278,7 @@ void WigleMenu::handleInput() {
     // R key - refresh list
     if (M5Cardputer.Keyboard.isKeyPressed('r') || M5Cardputer.Keyboard.isKeyPressed('R')) {
         scanFiles();
-        Display::showToast("REFRESHED");
-        delay(500);
+        Display::setTopBarMessage("WIGLE REFRESHED", 3000);
     }
     
     // D key - nuke selected track
@@ -193,83 +292,114 @@ void WigleMenu::handleInput() {
 
 void WigleMenu::uploadSelected() {
     if (files.empty() || selectedIndex >= files.size()) return;
+
+    // Prevent starting multiple parallel uploads
+    if (uploadTaskHandle != nullptr) {
+        Display::setTopBarMessage("WIGLE BUSY", 3000);
+        return;
+    }
+    // Guard: ensure enough contiguous heap for task stack (~8 KB)
+    if (heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) < 12000) {
+        Display::setTopBarMessage("LOW HEAP FOR WIGLE", 3000);
+        return;
+    }
     
-    WigleFileInfo& file = files[selectedIndex];
+    WigleFileInfo file = files[selectedIndex];
     
     // Check if already uploaded
     if (file.status == WigleFileStatus::UPLOADED) {
-        Display::showToast("ALREADY UPLOADED");
-        delay(500);
+        Display::setTopBarMessage("ALREADY UPLOADED", 3000);
         return;
     }
-    
+
     // Check for credentials
     if (!WiGLE::hasCredentials()) {
-        Display::showToast("NO WIGLE API KEY");
-        delay(500);
+        Display::setTopBarMessage("NO WIGLE API KEY", 4000);
         return;
     }
     
-    // Track if we initiated WiFi connection
-    bool weConnected = false;
-    
-    // Connect to WiFi if needed
-    connectingWiFi = true;
-    if (!WiGLE::isConnected()) {
-        Display::showToast("CONNECTING...");
-        if (!WiGLE::connect()) {
-            connectingWiFi = false;
-            Display::showToast(WiGLE::getLastError());
-            delay(500);
-            return;
-        }
-        weConnected = true;
-    }
-    connectingWiFi = false;
-    
-    // Upload the file
+    // Kick off upload in a dedicated FreeRTOS task with a larger stack.
+    // TLS handshakes can easily overflow Arduino's loopTask stack.
+    uploadTaskDone = false;
+    uploadTaskSuccess = false;
+    uploadTaskIndex = selectedIndex;
+    uploadTaskResultMsg[0] = '\0';
+
+    UploadTaskCtx* ctx = new UploadTaskCtx();
+    strncpy(ctx->fullPath, file.fullPath.c_str(), sizeof(ctx->fullPath) - 1);
+    ctx->fullPath[sizeof(ctx->fullPath) - 1] = '\0';
+    ctx->index = selectedIndex;
+
     uploadingFile = true;
-    Display::showToast("UPLOADING...");
-    
-    bool success = WiGLE::uploadFile(file.fullPath.c_str());
-    uploadingFile = false;
-    
-    if (success) {
-        file.status = WigleFileStatus::UPLOADED;
-        Display::showToast("UPLOAD OK!");
-    } else {
-        Display::showToast(WiGLE::getLastError());
-    }
-    delay(500);
-    
-    // Disconnect if we connected
-    if (weConnected) {
-        WiGLE::disconnect();
+    Display::setTopBarMessage("WIGLE UP...", 0);
+
+    // Pin to core 0 to keep Arduino loopTask responsive (loopTask usually runs on core 1).
+    BaseType_t ok = xTaskCreatePinnedToCore(
+        uploadTaskFn,
+        "wigle_upload",
+        6144,            // smaller stack to reduce heap use
+        ctx,
+        1,
+        &uploadTaskHandle,
+        0
+    );
+    if (ok != pdPASS) {
+        uploadTaskHandle = nullptr;
+        uploadingFile = false;
+        delete ctx;
+        Display::setTopBarMessage("WIGLE TASK FAIL", 4000);
     }
 }
 
-String WigleMenu::formatSize(uint32_t bytes) {
+void WigleMenu::formatSize(char* out, size_t len, uint32_t bytes) {
+    if (!out || len == 0) return;
     if (bytes < 1024) {
-        return String(bytes) + "B";
+        snprintf(out, len, "%uB", (unsigned)bytes);
     } else if (bytes < 1024 * 1024) {
-        return String(bytes / 1024) + "KB";
+        snprintf(out, len, "%uKB", (unsigned)(bytes / 1024));
     } else {
-        return String(bytes / (1024 * 1024)) + "MB";
+        snprintf(out, len, "%uMB", (unsigned)(bytes / (1024 * 1024)));
     }
 }
 
-String WigleMenu::getSelectedInfo() {
+void WigleMenu::getSelectedInfo(char* out, size_t len) {
+    if (!out || len == 0) return;
     if (files.empty() || selectedIndex >= files.size()) {
-        return "D0PAM1N3 SH0P: [U] [R] [D]";
+        snprintf(out, len, "D0PAM1N3 SH0P: [U] [R] [D]");
+        return;
     }
     const WigleFileInfo& file = files[selectedIndex];
-    // Show: ~XNETS XKB [OK]/[--]
-    String status = (file.status == WigleFileStatus::UPLOADED) ? "[OK]" : "[--]";
-    return "~" + String(file.networkCount) + "NETS " + formatSize(file.fileSize) + " " + status;
+    const char* status = (file.status == WigleFileStatus::UPLOADED) ? "[OK]" : "[--]";
+    char sizeBuf[12];
+    formatSize(sizeBuf, sizeof(sizeBuf), file.fileSize);
+    snprintf(out, len, "~%uNETS %s %s", (unsigned)file.networkCount, sizeBuf, status);
 }
 
 void WigleMenu::update() {
     if (!active) return;
+
+    // Handle completion of background upload task
+    if (uploadTaskHandle != nullptr && uploadTaskDone) {
+        // Task self-deletes; clear handle and report result in the UI thread.
+        uploadTaskHandle = nullptr;
+        uploadingFile = false;
+        connectingWiFi = false;
+
+        if (uploadTaskSuccess) {
+            if (!files.empty() && uploadTaskIndex < files.size()) {
+                files[uploadTaskIndex].status = WigleFileStatus::UPLOADED;
+            }
+            Display::setTopBarMessage(uploadTaskResultMsg[0] ? uploadTaskResultMsg : "WIGLE UPLOAD OK", 4000);
+        } else {
+            Display::setTopBarMessage(uploadTaskResultMsg[0] ? uploadTaskResultMsg : "WIGLE UPLOAD FAIL", 4000);
+        }
+
+        // Refresh the list to reflect new status
+        scanFiles();
+
+        uploadTaskDone = false;
+    }
+
     handleInput();
 }
 
@@ -307,17 +437,8 @@ void WigleMenu::draw(M5Canvas& canvas) {
         }
         
         // Filename first (truncated) - extract just the date/time part
-        String displayName = file.filename;
-        // Remove "warhog_" prefix and ".wigle.csv" suffix for cleaner display
-        if (displayName.startsWith("warhog_")) {
-            displayName = displayName.substring(7);
-        }
-        if (displayName.endsWith(".wigle.csv")) {
-            displayName = displayName.substring(0, displayName.length() - 10);
-        }
-        if (displayName.length() > 15) {
-            displayName = displayName.substring(0, 13) + "..";
-        }
+        char displayName[24];
+        formatDisplayName(file.filename, displayName, sizeof(displayName), 15, "..", true);
         canvas.setCursor(4, y);
         canvas.print(displayName);
         
@@ -331,7 +452,9 @@ void WigleMenu::draw(M5Canvas& canvas) {
         
         // Network count and size
         canvas.setCursor(140, y);
-        canvas.printf("~%d %s", file.networkCount, formatSize(file.fileSize).c_str());
+        char sizeBuf[12];
+        formatSize(sizeBuf, sizeof(sizeBuf), file.fileSize);
+        canvas.printf("~%u %s", (unsigned)file.networkCount, sizeBuf);
         
         y += lineHeight;
     }
@@ -357,9 +480,6 @@ void WigleMenu::draw(M5Canvas& canvas) {
         drawDetailView(canvas);
     }
     
-    if (connectingWiFi || uploadingFile) {
-        drawConnecting(canvas);
-    }
 }
 
 void WigleMenu::drawDetailView(M5Canvas& canvas) {
@@ -380,15 +500,16 @@ void WigleMenu::drawDetailView(M5Canvas& canvas) {
     canvas.setTextDatum(top_center);
     
     // Filename
-    String displayName = file.filename;
-    if (displayName.length() > 22) {
-        displayName = displayName.substring(0, 19) + "...";
-    }
+    char displayName[32];
+    formatDisplayName(file.filename, displayName, sizeof(displayName), 22, "...", false);
     canvas.drawString(displayName, boxX + boxW / 2, boxY + 8);
     
     // Stats
-    String stats = "~" + String(file.networkCount) + " networks, " + formatSize(file.fileSize);
-    canvas.drawString(stats, boxX + boxW / 2, boxY + 24);
+    char sizeBuf[12];
+    formatSize(sizeBuf, sizeof(sizeBuf), file.fileSize);
+    char statsBuf[64];
+    snprintf(statsBuf, sizeof(statsBuf), "~%u networks, %s", (unsigned)file.networkCount, sizeBuf);
+    canvas.drawString(statsBuf, boxX + boxW / 2, boxY + 24);
     
     // Status
     const char* statusText = (file.status == WigleFileStatus::UPLOADED) ? "UPLOADED" : "NOT UPLOADED";
@@ -446,12 +567,9 @@ void WigleMenu::drawNukeConfirm(M5Canvas& canvas) {
     int centerX = canvas.width() / 2;
     
     // Truncate filename for display
-    String displayName = file.filename;
-    if (displayName.length() > 22) {
-        displayName = displayName.substring(0, 19) + "...";
-    }
-    
     canvas.drawString("!! NUKE THE TRACK !!", centerX, boxY + 8);
+    char displayName[32];
+    formatDisplayName(file.filename, displayName, sizeof(displayName), 22, "...", false);
     canvas.drawString(displayName, centerX, boxY + 24);
     canvas.drawString("THIS KILLS THE FILE.", centerX, boxY + 38);
     canvas.drawString("[Y] DO IT  [N] ABORT", centerX, boxY + 54);
@@ -481,12 +599,11 @@ void WigleMenu::nukeTrack() {
     WiGLE::removeFromUploaded(file.fullPath.c_str());
     
     if (deleted) {
-        Display::showToast("TRACK NUKED!");
+        Display::setTopBarMessage("TRACK NUKED!", 4000);
     } else {
-        Display::showToast("NUKE FAILED");
+        Display::setTopBarMessage("NUKE FAILED", 4000);
     }
-    delay(500);
-    
+
     // Refresh the file list
     scanFiles();
     

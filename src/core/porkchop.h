@@ -19,12 +19,16 @@ enum class PorkchopMode : uint8_t {
     ACHIEVEMENTS,   // View achievements
     ABOUT,          // About screen
     FILE_TRANSFER,  // WiFi file transfer mode
-    LOG_VIEWER,     // View SD card logs
+    CRASH_VIEWER,     // Crash viewer
+    DIAGNOSTICS,    // System diagnostics
     SWINE_STATS,    // Lifetime stats and buffs overlay
     BOAR_BROS,      // Manage excluded networks
     WIGLE_MENU,     // WiGLE file uploads
     UNLOCKABLES,    // Secret challenges menu
-    CALL_PAPA_MODE  // BLE sync receiver (from Sirloin)
+    BOUNTY_STATUS,  // View active bounties
+    PIGSYNC_DEVICE_SELECT, // PigSync device selection
+    PIGSYNC_CALL, // PigSync active call
+    MARCO_MODE      // Hide and seek beacon broadcaster
 };
 
 // Events for async callbacks

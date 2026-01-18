@@ -5,6 +5,10 @@
 #include <M5Unified.h>
 #include <vector>
 
+// FreeRTOS task helpers (ESP32)
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+
 // WPA-SEC status for display
 enum class CaptureStatus {
     LOCAL,      // Not uploaded yet
@@ -31,7 +35,7 @@ public:
     static void update();
     static void draw(M5Canvas& canvas);
     static bool isActive() { return active; }
-    static String getSelectedBSSID();
+    static const char* getSelectedBSSID();
     static size_t getCount() { return captures.size(); }
     
 private:
@@ -45,10 +49,27 @@ private:
     static bool connectingWiFi;     // WiFi connection in progress
     static bool uploadingFile;      // Upload in progress
     static bool refreshingResults;  // Fetching WPA-SEC results
+
+    // WPA‑SEC worker task (runs TLS off the Arduino loopTask stack)
+    enum class WpaTaskAction : uint8_t { NONE = 0, UPLOAD, REFRESH };
+    static TaskHandle_t wpaTaskHandle;
+    static volatile bool wpaTaskDone;
+    static volatile bool wpaTaskSuccess;
+    static volatile WpaTaskAction wpaTaskAction;
+    static uint8_t wpaTaskIndex;  // which capture was uploaded
+    static char wpaTaskResultMsg[64];
+
+    struct WpaTaskCtx {
+        WpaTaskAction action;
+        char pcapPath[128];
+        uint8_t index;
+    };
+
+    static void wpaTaskFn(void* pv);
     
     static const uint8_t VISIBLE_ITEMS = 5;
     
-    static void scanCaptures();
+    static bool scanCaptures();  // Returns true if successful, false if SD access failed
     static void handleInput();
     static void drawNukeConfirm(M5Canvas& canvas);
     static void drawDetailView(M5Canvas& canvas);
@@ -57,5 +78,6 @@ private:
     static void updateWPASecStatus();
     static void uploadSelected();
     static void refreshResults();
-    static String formatTime(time_t t);
+    static void formatTime(char* out, size_t len, time_t t);
+    static const size_t MAX_CAPTURES = 200;
 };

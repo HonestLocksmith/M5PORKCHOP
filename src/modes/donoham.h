@@ -77,7 +77,11 @@ public:
     
     // Frame handlers (called from shared callback)
     static void handleBeacon(const uint8_t* frame, uint16_t len, int8_t rssi);
+    static void handleProbeResponse(const uint8_t* frame, uint16_t len, int8_t rssi);
     static void handleEAPOL(const uint8_t* frame, uint16_t len, int8_t rssi);
+    
+    // Stress test injection (no RF)
+    static void injectTestNetwork(const uint8_t* bssid, const char* ssid, uint8_t channel, int8_t rssi, wifi_auth_mode_t authmode, bool hasPMF);
     
 private:
     static bool running;

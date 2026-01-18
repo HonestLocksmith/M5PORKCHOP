@@ -26,6 +26,10 @@ public:
     static const char* getStatus() { return statusMessage; }
     static uint64_t getSDFreeSpace();
     static uint64_t getSDTotalSpace();
+    static uint64_t getSessionRxBytes() { return sessionRxBytes; }
+    static uint64_t getSessionTxBytes() { return sessionTxBytes; }
+    static uint32_t getSessionUploadCount() { return sessionUploadCount; }
+    static uint32_t getSessionDownloadCount() { return sessionDownloadCount; }
     
 private:
     static WebServer* server;
@@ -35,6 +39,10 @@ private:
     static char targetPassword[64];
     static uint32_t connectStartTime;
     static uint32_t lastReconnectCheck;
+    static uint64_t sessionRxBytes;
+    static uint64_t sessionTxBytes;
+    static uint32_t sessionUploadCount;
+    static uint32_t sessionDownloadCount;
     
     // State machine
     static void updateConnecting();

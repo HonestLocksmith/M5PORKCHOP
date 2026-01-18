@@ -13,7 +13,9 @@ enum class PorkClass : uint8_t {
     R0GU3    = 4,   // L21-25 - Rogue APs
     EXPL01T  = 5,   // L26-30 - Famous exploits
     WARL0RD  = 6,   // L31-35 - WiFi mastery
-    L3G3ND   = 7    // L36-40 - Legendary hackers
+    L3G3ND   = 7,   // L36-40 - Legendary hackers
+    K3RN3L_H0G = 8, // L41-45 - Kernel tier
+    B4C0NM4NC3R = 9 // L46-50 - Baconmancer tier
 };
 
 // Title overrides - special playstyle-based titles
@@ -52,7 +54,8 @@ enum class XPEvent : uint8_t {
     DNH_NETWORK_PASSIVE,    // +2 XP - network found in passive mode
     DNH_PMKID_GHOST,        // +100 XP - PMKID captured passively (rare!)
     BOAR_BRO_ADDED,         // +5 XP - added network to BOAR BROS
-    BOAR_BRO_MERCY          // +15 XP - excluded mid-attack target
+    BOAR_BRO_MERCY,         // +15 XP - excluded mid-attack target
+    SMOKED_BACON            // +15 XP - rare upload bonus
 };
 
 // Achievement bitflags (uint64_t for 60 achievements)
@@ -120,7 +123,7 @@ enum PorkAchievement : uint64_t {
     ACH_ROGUE_SPOTTER   = 1ULL << 43,  // ML detects rogue AP
     ACH_HIDDEN_MASTER   = 1ULL << 44,  // 50 hidden networks
     ACH_WPA3_HUNTER     = 1ULL << 45,  // 25 WPA3 networks
-    ACH_MAX_LEVEL       = 1ULL << 46,  // Reach level 40
+    ACH_MAX_LEVEL       = 1ULL << 46,  // Reach level 50
     ACH_ABOUT_JUNKIE    = 1ULL << 47,  // Press Enter 5x in About screen
     
     // DO NO HAM achievements (bits 48-52) - pacifist/stealth playstyle
@@ -169,6 +172,7 @@ struct PorkXPData {
     uint32_t androidBLE;        // Android FastPair count (new)
     uint32_t samsungBLE;        // Samsung BLE count (new)
     uint32_t windowsBLE;        // Windows SwiftPair count (new)
+    uint32_t rouletteWins;      // PiggyBlues no-reboot roulette wins
     uint16_t sessions;          // Session count
     uint8_t  cachedLevel;       // Cached level for quick access
     bool     wepFound;          // WEP network ever found (new)
@@ -215,10 +219,13 @@ public:
     static void init();
     static void save();
     static void processPendingSave();  // Process deferred saves (call from safe context)
+    static void processAchievementQueue();  // Process one queued achievement celebration
     
     // XP operations
     static void addXP(XPEvent event);
-    static void addXP(uint16_t amount);  // Direct XP add
+    static void addXP(uint16_t amount);  // Direct XP add (can trigger JACKPOT)
+    static void addXPSilent(uint16_t amount);  // Silent XP add (no JACKPOT, no toast)
+    static void addRouletteWin();  // PiggyBlues no-reboot roulette counter
     
     // Level info
     static uint8_t getLevel();
@@ -242,7 +249,7 @@ public:
     static PorkClass getClassForLevel(uint8_t level);
     static const char* getClassName();
     static const char* getClassNameFor(PorkClass cls);
-    static uint8_t getClassIndex();  // 0-7
+    static uint8_t getClassIndex();  // 0-9
     
     // Achievements
     static void unlockAchievement(PorkAchievement ach);
@@ -270,6 +277,11 @@ public:
     
     // Draw XP bar on canvas
     static void drawBar(M5Canvas& canvas);
+    
+    // XP notification for top bar (Option B: flash on gain)
+    static bool shouldShowXPNotification();  // True if within 5 sec of last XP gain
+    static void drawTopBarXP(M5Canvas& topBar);  // Draw inverted XP info on top bar
+    static uint16_t getLastXPGainAmount();
     
     // Level up callback (set by display to show popup)
     static void setLevelUpCallback(void (*callback)(uint8_t oldLevel, uint8_t newLevel));

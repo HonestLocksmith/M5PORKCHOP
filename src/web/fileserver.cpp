@@ -1,8 +1,11 @@
 // WiFi File Server implementation
 
 #include "fileserver.h"
+#include <esp_heap_caps.h>
 #include <SD.h>
 #include <ESPmDNS.h>
+#include <pgmspace.h>
+#include "../core/wifi_utils.h"
 
 // Static members
 WebServer* FileServer::server = nullptr;
@@ -12,10 +15,83 @@ char FileServer::targetSSID[64] = "";
 char FileServer::targetPassword[64] = "";
 uint32_t FileServer::connectStartTime = 0;
 uint32_t FileServer::lastReconnectCheck = 0;
+uint64_t FileServer::sessionRxBytes = 0;
+uint64_t FileServer::sessionTxBytes = 0;
+uint32_t FileServer::sessionUploadCount = 0;
+uint32_t FileServer::sessionDownloadCount = 0;
 
 // File upload state (needs to be declared early for stop() to access it)
 static File uploadFile;
 static String uploadDir;
+static bool uploadActive = false;
+static uint32_t uploadLastProgress = 0;
+static bool uploadRejected = false;
+static bool listActive = false;
+static String uploadPath;
+static size_t uploadBytesThisFile = 0;
+
+static void logWiFiStatus(const char* label) {
+    // Print WiFi status and mode to aid debugging of server connection issues
+    (void)label;
+    wifi_mode_t mode = WiFi.getMode();
+    wl_status_t status = WiFi.status();
+    Serial.printf("[FILESERVER] %s WiFi mode=%d status=%d\n", label, (int)mode, (int)status);
+}
+
+static void logRequest(WebServer* srv, const char* label) {
+    // Log incoming HTTP request method and URI for debugging
+    (void)label;
+    if (!srv) return;
+    String method;
+    switch (srv->method()) {
+        case HTTP_GET: method = "GET"; break;
+        case HTTP_POST: method = "POST"; break;
+        case HTTP_PUT: method = "PUT"; break;
+        case HTTP_DELETE: method = "DELETE"; break;
+        default: method = String((int)srv->method()); break;
+    }
+    Serial.printf("[FILESERVER] %s %s\n", method.c_str(), srv->uri().c_str());
+}
+
+static void logHeapStatus(const char* label) {
+    // Log current free heap and largest free block for debugging memory usage
+    size_t freeHeap = ESP.getFreeHeap();
+    size_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+    Serial.printf("[FILESERVER] %s heap free=%u largest=%u\n", label ? label : "heap", (unsigned int)freeHeap, (unsigned int)largest);
+}
+
+static void logHeapStatusIfLow(const char* label) {
+    // If free heap drops below 60k, log details to help trace memory issues
+    size_t freeHeap = ESP.getFreeHeap();
+    if (freeHeap < 60000) {
+        size_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+        Serial.printf("[FILESERVER] %s low heap free=%u largest=%u\n", label ? label : "low heap", (unsigned int)freeHeap, (unsigned int)largest);
+    }
+}
+
+static bool isTransferBusy() {
+    return uploadActive;
+}
+
+static void sendBusyResponse(WebServer* srv) {
+    srv->sendHeader("Connection", "close");
+    srv->send(503, "text/plain", "Busy");
+}
+
+static void appendJsonEscaped(String& out, const char* in) {
+    while (*in) {
+        char c = *in++;
+        if (c == '\"') {
+            out += "\\\"";
+        } else if (c == '\\') {
+            out += "\\\\";
+        } else if (static_cast<uint8_t>(c) < 0x20) {
+            out += ' ';
+        } else {
+            out += c;
+        }
+    }
+}
 
 // Black & white HTML interface - Midnight Commander style dual-pane
 static const char HTML_TEMPLATE[] PROGMEM = R"rawliteral(
@@ -26,7 +102,7 @@ static const char HTML_TEMPLATE[] PROGMEM = R"rawliteral(
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>PORKCHOP COMMANDER</title>
     <style>
-        :root { --pink: #FFAEAD; --bg: #000; --sel: #331a1a; --active: #442222; }
+        :root { --pink: #C8B2FF; --bg: #2E1A47; --sel: #3A2058; --active: #4B2A6E; }
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body { 
             background: var(--bg); 
@@ -57,15 +133,15 @@ static const char HTML_TEMPLATE[] PROGMEM = R"rawliteral(
             flex: 1;
             display: flex;
             flex-direction: column;
-            border-right: 1px solid #331a1a;
+            border-right: 1px solid #3A2058;
             overflow: hidden;
         }
         .pane:last-child { border-right: none; }
         .pane.active .pane-header { background: var(--active); }
         .pane-header {
             padding: 6px 10px;
-            background: #0a0505;
-            border-bottom: 1px solid #331a1a;
+            background: #231238;
+            border-bottom: 1px solid #3A2058;
             display: flex;
             justify-content: space-between;
             font-size: 0.85em;
@@ -88,21 +164,15 @@ static const char HTML_TEMPLATE[] PROGMEM = R"rawliteral(
             align-items: center;
             padding: 4px 8px;
             cursor: pointer;
-            border-bottom: 1px solid #0a0505;
+            border-bottom: 1px solid #231238;
         }
-        .file-item:hover { background: #0f0808; }
+        .file-item:hover { background: #2B1741; }
         .file-item.focused { background: var(--sel); outline: 1px solid var(--pink); }
         .file-item.selected { background: var(--active); }
-        .file-item.selected.focused { background: #553333; }
+        .file-item.selected.focused { background: #5A3280; }
         .file-check { 
-            width: 20px; 
-            height: 16px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            opacity: 0.3;
+            display: none;
         }
-        .file-item.selected .file-check { opacity: 1; }
         .file-icon { 
             width: 20px; 
             text-align: center; 
@@ -128,8 +198,8 @@ static const char HTML_TEMPLATE[] PROGMEM = R"rawliteral(
             display: flex;
             gap: 5px;
             padding: 8px;
-            background: #050505;
-            border-top: 1px solid #331a1a;
+            background: #1D102F;
+            border-top: 1px solid #3A2058;
             flex-shrink: 0;
             flex-wrap: wrap;
         }
@@ -150,12 +220,12 @@ static const char HTML_TEMPLATE[] PROGMEM = R"rawliteral(
             border: 1px solid var(--pink); 
             opacity: 0.7; 
         }
-        .btn-outline:hover { opacity: 1; background: #1a0d0d; }
-        .btn-danger { background: #442222; color: var(--pink); }
+        .btn-outline:hover { opacity: 1; background: #2E1A47; }
+        .btn-danger { background: #4B2A6E; color: var(--pink); }
         .fkey-bar {
             display: flex;
-            background: #111;
-            border-top: 1px solid #331a1a;
+            background: #241238;
+            border-top: 1px solid #3A2058;
             flex-shrink: 0;
         }
         .fkey {
@@ -163,17 +233,17 @@ static const char HTML_TEMPLATE[] PROGMEM = R"rawliteral(
             padding: 6px 4px;
             text-align: center;
             font-size: 0.75em;
-            border-right: 1px solid #222;
+            border-right: 1px solid #2C1744;
             cursor: pointer;
         }
-        .fkey:hover { background: #1a0d0d; }
+        .fkey:hover { background: #2E1A47; }
         .fkey:last-child { border-right: none; }
         .fkey span { opacity: 0.5; }
         .status {
             padding: 4px 10px;
             font-size: 0.8em;
-            background: #050505;
-            border-top: 1px solid #1a0d0d;
+            background: #1D102F;
+            border-top: 1px solid #2E1A47;
             min-height: 22px;
             flex-shrink: 0;
         }
@@ -197,9 +267,9 @@ static const char HTML_TEMPLATE[] PROGMEM = R"rawliteral(
         .modal-content h3 { margin-bottom: 15px; font-weight: normal; }
         .modal-actions { display: flex; gap: 10px; margin-top: 15px; }
         input[type="text"] {
-            background: #0a0505;
+            background: #231238;
             color: var(--pink);
-            border: 1px solid #331a1a;
+            border: 1px solid #3A2058;
             padding: 8px;
             font-family: inherit;
             width: 100%;
@@ -215,7 +285,7 @@ static const char HTML_TEMPLATE[] PROGMEM = R"rawliteral(
         }
         .progress-bar {
             height: 4px;
-            background: #1a0d0d;
+            background: #2E1A47;
             margin-top: 5px;
             display: none;
         }
@@ -228,14 +298,14 @@ static const char HTML_TEMPLATE[] PROGMEM = R"rawliteral(
         }
         @media (max-width: 600px) {
             .panes { flex-direction: column; }
-            .pane { border-right: none; border-bottom: 1px solid #331a1a; }
+            .pane { border-right: none; border-bottom: 1px solid #3A2058; }
             .file-size { display: none; }
         }
     </style>
 </head>
 <body>
     <div class="header">
-        <h1>PORKCHOP COMMANDER</h1>
+        <h1>PORKCHOP COMMANDOR 64</h1>
         <div class="sd-info" id="sdInfo">...</div>
     </div>
     
@@ -335,18 +405,35 @@ Backspace      Parent folder
 <script>
 // Pane state
 const panes = {
-    L: { path: '/', items: [], selected: new Set(), focusIdx: 0 },
-    R: { path: '/', items: [], selected: new Set(), focusIdx: 0 }
+    L: { path: '/', items: [], selected: new Set(), focusIdx: 0, loading: false },
+    R: { path: '/', items: [], selected: new Set(), focusIdx: 0, loading: false }
 };
 let activePane = 'L';
+let sdInfoLoading = false;
+let refreshInProgress = false;
+let refreshPending = false;
+let lastRefreshAt = 0;
+let fetchQueue = Promise.resolve();
+const LIST_LIMIT = 200;
+
+function queuedFetch(url, options) {
+    const run = () => fetch(url, options);
+    const p = fetchQueue.then(run, run);
+    fetchQueue = p.catch(() => {});
+    return p;
+}
 
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
-    loadSDInfo();
-    loadPane('L', '/');
-    loadPane('R', '/');
     document.addEventListener('keydown', handleKeydown);
+    bootstrap();
 });
+
+async function bootstrap() {
+    await loadPane('L', '/');
+    await loadPane('R', '/');
+    await loadSDInfo();
+}
 
 function setActivePane(id) {
     activePane = id;
@@ -355,19 +442,25 @@ function setActivePane(id) {
 }
 
 async function loadSDInfo() {
+    if (sdInfoLoading) return;
+    sdInfoLoading = true;
     try {
-        const r = await fetch('/api/sdinfo');
+        const r = await queuedFetch('/api/sdinfo');
         const d = await r.json();
         const pct = ((d.used / d.total) * 100).toFixed(0);
         document.getElementById('sdInfo').textContent = 
             formatSize(d.used * 1024) + ' / ' + formatSize(d.total * 1024) + ' (' + pct + '%)';
     } catch(e) {
         document.getElementById('sdInfo').textContent = 'no sd. no loot.';
+    } finally {
+        sdInfoLoading = false;
     }
 }
 
 async function loadPane(id, path) {
     const pane = panes[id];
+    if (pane.loading) return;
+    pane.loading = true;
     pane.path = path;
     pane.selected.clear();
     pane.focusIdx = 0;
@@ -377,7 +470,7 @@ async function loadPane(id, path) {
     list.innerHTML = '<div style="padding:20px;opacity:0.5">jacking in...</div>';
     
     try {
-        const r = await fetch('/api/ls?dir=' + encodeURIComponent(path) + '&full=1');
+        const r = await queuedFetch('/api/ls?dir=' + encodeURIComponent(path) + '&full=1&limit=' + LIST_LIMIT);
         const items = await r.json();
         
         // Sort: directories first, then alphabetically
@@ -399,8 +492,10 @@ async function loadPane(id, path) {
         renderPane(id);
     } catch(e) {
         list.innerHTML = '<div style="padding:20px;opacity:0.5">load failed</div>';
+    } finally {
+        pane.loading = false;
+        updateSelectionInfo(id);
     }
-    updateSelectionInfo(id);
 }
 
 function renderPane(id) {
@@ -620,7 +715,7 @@ async function deleteSelected() {
     setStatus('nuking ' + items.length + ' targets...');
     
     try {
-        const resp = await fetch('/api/bulkdelete', {
+        const resp = await queuedFetch('/api/bulkdelete', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ paths: items.map(i => i.path) })
@@ -665,10 +760,25 @@ function downloadFile(paneId, idx) {
     window.location.href = '/download?f=' + encodeURIComponent(path);
 }
 
-function refresh() {
-    loadPane('L', panes.L.path);
-    loadPane('R', panes.R.path);
-    loadSDInfo();
+async function refresh() {
+    const now = Date.now();
+    if (refreshInProgress) {
+        refreshPending = true;
+        return;
+    }
+    if (now - lastRefreshAt < 500) {
+        return;
+    }
+    refreshInProgress = true;
+    lastRefreshAt = now;
+    await loadPane('L', panes.L.path);
+    await loadPane('R', panes.R.path);
+    await loadSDInfo();
+    refreshInProgress = false;
+    if (refreshPending) {
+        refreshPending = false;
+        refresh();
+    }
 }
 
 function showNewFolderModal() {
@@ -708,7 +818,7 @@ async function doRename() {
     const newPath = (pane.path === '/' ? '' : pane.path) + '/' + newName;
     
     try {
-        const resp = await fetch('/api/rename?old=' + encodeURIComponent(oldPath) + '&new=' + encodeURIComponent(newPath));
+        const resp = await queuedFetch('/api/rename?old=' + encodeURIComponent(oldPath) + '&new=' + encodeURIComponent(newPath));
         const result = await resp.json();
         if (result.success) {
             setStatus('renamed: ' + newName);
@@ -733,7 +843,11 @@ async function copySelected() {
     }
     
     // Get selected or focused items
-    let items = src.items.filter(i => i.selected && !i.isParent);
+    let items = [];
+    src.selected.forEach(idx => {
+        const item = src.items[idx];
+        if (item && !item.isParent) items.push(item);
+    });
     if (!items.length && src.focusIdx >= 0) {
         const item = src.items[src.focusIdx];
         if (item && !item.isParent) items = [item];
@@ -744,7 +858,7 @@ async function copySelected() {
     setStatus('copying ' + items.length + ' item(s)...');
     
     try {
-        const resp = await fetch('/api/copy', {
+        const resp = await queuedFetch('/api/copy', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({files: paths, dest: dst.path})
@@ -772,7 +886,11 @@ async function moveSelected() {
     }
     
     // Get selected or focused items
-    let items = src.items.filter(i => i.selected && !i.isParent);
+    let items = [];
+    src.selected.forEach(idx => {
+        const item = src.items[idx];
+        if (item && !item.isParent) items.push(item);
+    });
     if (!items.length && src.focusIdx >= 0) {
         const item = src.items[src.focusIdx];
         if (item && !item.isParent) items = [item];
@@ -783,7 +901,7 @@ async function moveSelected() {
     setStatus('moving ' + items.length + ' item(s)...');
     
     try {
-        const resp = await fetch('/api/move', {
+        const resp = await queuedFetch('/api/move', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({files: paths, dest: dst.path})
@@ -810,7 +928,7 @@ async function createFolder() {
     const path = (pane.path === '/' ? '' : pane.path) + '/' + name;
     
     try {
-        const resp = await fetch('/mkdir?f=' + encodeURIComponent(path));
+        const resp = await queuedFetch('/mkdir?f=' + encodeURIComponent(path));
         if (resp.ok) {
             setStatus('spawned: ' + name);
             hideModal();
@@ -885,14 +1003,22 @@ void FileServer::init() {
     strcpy(statusMessage, "Ready");
     targetSSID[0] = '\0';
     targetPassword[0] = '\0';
+    sessionRxBytes = 0;
+    sessionTxBytes = 0;
+    sessionUploadCount = 0;
+    sessionDownloadCount = 0;
 }
 
 bool FileServer::start(const char* ssid, const char* password) {
-    if (state != FileServerState::IDLE) return true;
+    if (state != FileServerState::IDLE) {
+        return true;
+    }
     
     // Store credentials for reconnection
     strncpy(targetSSID, ssid ? ssid : "", sizeof(targetSSID) - 1);
+    targetSSID[sizeof(targetSSID) - 1] = '\0';
     strncpy(targetPassword, password ? password : "", sizeof(targetPassword) - 1);
+    targetPassword[sizeof(targetPassword) - 1] = '\0';
     
     // Check credentials
     if (strlen(targetSSID) == 0) {
@@ -901,11 +1027,15 @@ bool FileServer::start(const char* ssid, const char* password) {
     }
     
     strcpy(statusMessage, "jacking in.");
-    Serial.printf("[FILESERVER] Starting connection to %s\n", targetSSID);
+    logWiFiStatus("before connect");
+
+    sessionRxBytes = 0;
+    sessionTxBytes = 0;
+    sessionUploadCount = 0;
+    sessionDownloadCount = 0;
     
-    // Start non-blocking connection
-    WiFi.disconnect(true);
-    WiFi.mode(WIFI_STA);
+    // Start non-blocking connection (force restart to recover from desync)
+    WiFiUtils::hardReset();
     WiFi.begin(targetSSID, targetPassword);
     
     state = FileServerState::CONNECTING;
@@ -916,16 +1046,13 @@ bool FileServer::start(const char* ssid, const char* password) {
 
 void FileServer::startServer() {
     snprintf(statusMessage, sizeof(statusMessage), "%s", WiFi.localIP().toString().c_str());
-    Serial.printf("[FILESERVER] Connected! IP: %s\n", WiFi.localIP().toString().c_str());
+    logWiFiStatus("startServer");
     
     // Start mDNS
-    if (MDNS.begin("porkchop")) {
-        Serial.println("[FILESERVER] mDNS: porkchop.local");
-    }
+    MDNS.begin("porkchop");
     
     // Create and configure web server
     server = new WebServer(80);
-    
     server->on("/", HTTP_GET, handleRoot);
     server->on("/api/ls", HTTP_GET, handleFileList);
     server->on("/api/sdinfo", HTTP_GET, handleSDInfo);
@@ -943,18 +1070,18 @@ void FileServer::startServer() {
     server->begin();
     state = FileServerState::RUNNING;
     lastReconnectCheck = millis();
-    
-    Serial.println("[FILESERVER] Server started on port 80");
 }
 
 void FileServer::stop() {
-    if (state == FileServerState::IDLE) return;
-    
+    if (state == FileServerState::IDLE) {
+        return;
+    }
     // Close any pending upload file
     if (uploadFile) {
         uploadFile.close();
-        Serial.println("[FILESERVER] Closed pending upload file");
     }
+    uploadActive = false;
+    uploadRejected = false;
     
     if (server) {
         server->stop();
@@ -963,12 +1090,14 @@ void FileServer::stop() {
     }
     
     MDNS.end();
-    WiFi.disconnect(true);
-    WiFi.mode(WIFI_OFF);
+    WiFiUtils::shutdown();
     
     state = FileServerState::IDLE;
     strcpy(statusMessage, "Stopped");
-    Serial.println("[FILESERVER] Stopped");
+    sessionRxBytes = 0;
+    sessionTxBytes = 0;
+    sessionUploadCount = 0;
+    sessionDownloadCount = 0;
 }
 
 void FileServer::update() {
@@ -1000,8 +1129,8 @@ void FileServer::updateConnecting() {
     // Timeout after 15 seconds
     if (elapsed > 15000) {
         strcpy(statusMessage, "Connection failed");
-        Serial.println("[FILESERVER] Connection timeout");
-        WiFi.disconnect(true);
+        logWiFiStatus("connect timeout");
+        WiFiUtils::shutdown();
         state = FileServerState::IDLE;
     }
 }
@@ -1010,6 +1139,14 @@ void FileServer::updateRunning() {
     if (server) {
         server->handleClient();
     }
+
+    if (uploadActive && (millis() - uploadLastProgress > 10000)) {
+        if (uploadFile) {
+            uploadFile.close();
+        }
+        uploadActive = false;
+        uploadRejected = false;
+    }
     
     // Check WiFi connection every 5 seconds
     uint32_t now = millis();
@@ -1017,8 +1154,8 @@ void FileServer::updateRunning() {
         lastReconnectCheck = now;
         
         if (WiFi.status() != WL_CONNECTED) {
-            Serial.println("[FILESERVER] WiFi lost, reconnecting...");
             strcpy(statusMessage, "retry hack.");
+            logWiFiStatus("wifi lost");
             
             // Stop server but keep credentials
             if (server) {
@@ -1031,7 +1168,7 @@ void FileServer::updateRunning() {
             MDNS.end();
             
             // Restart connection
-            WiFi.disconnect(true);
+            WiFiUtils::hardReset();
             WiFi.begin(targetSSID, targetPassword);
             state = FileServerState::RECONNECTING;
             connectStartTime = millis();
@@ -1048,10 +1185,55 @@ uint64_t FileServer::getSDTotalSpace() {
 }
 
 void FileServer::handleRoot() {
-    server->send(200, "text/html", HTML_TEMPLATE);
-}
+    logRequest(server, "REQ");
+    if (isTransferBusy()) {
+        sendBusyResponse(server);
+        return;
+    }
+    logHeapStatus("before /");
+    const size_t totalLen = strlen_P(HTML_TEMPLATE);
+    server->sendHeader("Connection", "close");
+    server->sendHeader("Cache-Control", "no-store");
+    server->setContentLength(totalLen);
+    server->send(200, "text/html; charset=utf-8", "");
+
+    WiFiClient client = server->client();
+    client.setNoDelay(true);
+
+    const size_t chunkSize = 512;
+    size_t offset = 0;
+    uint32_t lastProgress = millis();
+
+    while (offset < totalLen && client.connected()) {
+        size_t len = totalLen - offset;
+        if (len > chunkSize) {
+            len = chunkSize;
+        }
+        size_t sent = client.write_P(HTML_TEMPLATE + offset, len);
+        if (sent == 0) {
+            if (millis() - lastProgress > 2000) {
+                break;
+            }
+            delay(1);
+            yield();
+            continue;
+        }
+        offset += sent;
+        lastProgress = millis();
+        yield();
+    }
+    client.flush();
+    sessionTxBytes += offset;
+    logHeapStatus("after /");
+    }
 
 void FileServer::handleSDInfo() {
+    logRequest(server, "REQ");
+    if (isTransferBusy()) {
+        sendBusyResponse(server);
+        return;
+    }
+    logHeapStatusIfLow("before /api/sdinfo");
     String json = "{\"total\":";
     json += String((unsigned long)(SD.totalBytes() / 1024));  // KB
     json += ",\"used\":";
@@ -1059,61 +1241,111 @@ void FileServer::handleSDInfo() {
     json += ",\"free\":";
     json += String((unsigned long)((SD.totalBytes() - SD.usedBytes()) / 1024));
     json += "}";
+    server->sendHeader("Connection", "close");
     server->send(200, "application/json", json);
+    sessionTxBytes += json.length();
+    logHeapStatusIfLow("after /api/sdinfo");
 }
 
 void FileServer::handleFileList() {
     String dir = server->arg("dir");
     bool full = server->arg("full") == "1";
+    uint16_t limit = server->arg("limit").toInt();
+    logRequest(server, "REQ");
+    if (listActive || isTransferBusy()) {
+        sendBusyResponse(server);
+        return;
+    }
+    listActive = true;
+    if (limit == 0 || limit > 1000) {
+        limit = 200;
+    }
     if (dir.isEmpty()) dir = "/";
+    logHeapStatusIfLow("before /api/ls");
     
     // Security: prevent directory traversal
     if (dir.indexOf("..") >= 0) {
+        server->sendHeader("Connection", "close");
         server->send(400, "application/json", "[]");
+        listActive = false;
         return;
     }
     
     File root = SD.open(dir);
     if (!root || !root.isDirectory()) {
+        server->sendHeader("Connection", "close");
         server->send(200, "application/json", "[]");
+        listActive = false;
         return;
     }
-    
-    String json = "[";
+
+    WiFiClient client = server->client();
+    client.setNoDelay(true);
+
+    server->sendHeader("Connection", "close");
+    server->setContentLength(CONTENT_LENGTH_UNKNOWN);
+    server->send(200, "application/json", "[");
+
     bool first = true;
-    
+    uint16_t sentCount = 0;
+    String buffer;
+    buffer.reserve(1024);
+
     File file = root.openNextFile();
-    while (file) {
-        if (!first) json += ",";
-        first = false;
-        
-        // Escape filename for JSON
-        String fname = file.name();
-        fname.replace("\\", "\\\\");
-        fname.replace("\"", "\\\"");
-        
-        json += "{\"name\":\"";
-        json += fname;
-        json += "\",\"size\":";
-        json += String(file.size());
-        if (full) {
-            json += ",\"isDir\":";
-            json += file.isDirectory() ? "true" : "false";
+    while (file && sentCount < limit) {
+        yield();
+
+        if (!first) {
+            buffer += ",";
         }
-        json += "}";
-        
+        buffer += "{\"name\":\"";
+        appendJsonEscaped(buffer, file.name());
+        buffer += "\",\"size\":";
+        buffer += String((unsigned)file.size());
+        if (full) {
+            buffer += ",\"isDir\":";
+            buffer += file.isDirectory() ? "true" : "false";
+        }
+        buffer += "}";
+
+        if (buffer.length() >= 1024) {
+            server->sendContent(buffer);
+            sessionTxBytes += buffer.length();
+            buffer = "";
+            if (!client.connected()) {
+                file.close();
+                root.close();
+                listActive = false;
+                return;
+            }
+        }
+
+        first = false;
+        sentCount++;
         file.close();
         file = root.openNextFile();
     }
-    
+
+    if (file) {
+        file.close();
+    }
     root.close();
-    json += "]";
-    server->send(200, "application/json", json);
+
+    buffer += "]";
+    server->sendContent(buffer);
+    sessionTxBytes += buffer.length();
+    server->sendContent("");
+    client.flush();
+    client.stop();
+    logHeapStatusIfLow("after /api/ls");
+    listActive = false;
 }
 
 void FileServer::handleDownload() {
     String path = server->arg("f");
     String dir = server->arg("dir");  // For ZIP download
+    logRequest(server, "REQ");
+    logHeapStatusIfLow("before /download");
     
     // ZIP download of folder
     if (!dir.isEmpty()) {
@@ -1124,19 +1356,28 @@ void FileServer::handleDownload() {
         return;
     }
     
+    if (uploadActive) {
+        server->sendHeader("Connection", "close");
+        server->send(409, "text/plain", "Upload in progress");
+        return;
+    }
+
     if (path.isEmpty()) {
+        server->sendHeader("Connection", "close");
         server->send(400, "text/plain", "Missing file path");
         return;
     }
     
     // Security: prevent directory traversal
     if (path.indexOf("..") >= 0) {
+        server->sendHeader("Connection", "close");
         server->send(400, "text/plain", "Invalid path");
         return;
     }
     
     File file = SD.open(path);
     if (!file || file.isDirectory()) {
+        server->sendHeader("Connection", "close");
         server->send(404, "text/plain", "File not found");
         return;
     }
@@ -1155,12 +1396,83 @@ void FileServer::handleDownload() {
     else if (path.endsWith(".json")) contentType = "application/json";
     else if (path.endsWith(".pcap")) contentType = "application/vnd.tcpdump.pcap";
     
+    const size_t totalSize = file.size();
+    server->sendHeader("Connection", "close");
     server->sendHeader("Content-Disposition", "attachment; filename=\"" + filename + "\"");
-    server->streamFile(file, contentType);
+    server->setContentLength(totalSize);
+    server->send(200, contentType, "");
+
+    WiFiClient client = server->client();
+    client.setNoDelay(true);
+
+    static uint8_t buffer[1024];
+    size_t sentTotal = 0;
+    uint32_t lastProgress = millis();
+    bool stalled = false;
+
+    while (sentTotal < totalSize && client.connected()) {
+        yield();
+
+        size_t toRead = totalSize - sentTotal;
+        if (toRead > sizeof(buffer)) {
+            toRead = sizeof(buffer);
+        }
+
+        size_t readBytes = file.read(buffer, toRead);
+        if (readBytes == 0) {
+            break;
+        }
+
+        size_t offset = 0;
+        while (offset < readBytes && client.connected()) {
+            size_t chunk = readBytes - offset;
+            int avail = client.availableForWrite();
+            if (avail > 0 && chunk > static_cast<size_t>(avail)) {
+                chunk = static_cast<size_t>(avail);
+            }
+
+            size_t written = client.write(buffer + offset, chunk);
+            if (written == 0) {
+                if (millis() - lastProgress > 8000) {
+                    stalled = true;
+                    break;
+                }
+                delay(1);
+                yield();
+                continue;
+            }
+
+            offset += written;
+            sentTotal += written;
+            lastProgress = millis();
+        }
+
+        if (stalled) {
+            break;
+        }
+    }
+
+    client.flush();
+    client.stop();
     file.close();
+
+    if (sentTotal > 0) {
+        sessionTxBytes += sentTotal;
+        sessionDownloadCount++;
+    }
+
+    logHeapStatusIfLow("after /download");
 }
 
 void FileServer::handleUpload() {
+    logRequest(server, "REQ");
+    if (uploadRejected) {
+        server->sendHeader("Connection", "close");
+        server->send(409, "text/plain", "Transfer in progress");
+        uploadRejected = false;
+        return;
+    }
+    server->sendHeader("Connection", "close");
     server->send(200, "text/plain", "OK");
 }
 
@@ -1168,6 +1480,14 @@ void FileServer::handleUploadProcess() {
     HTTPUpload& upload = server->upload();
     
     if (upload.status == UPLOAD_FILE_START) {
+        if (uploadActive) {
+            uploadRejected = true;
+            return;
+        }
+        uploadRejected = false;
+        uploadActive = true;
+        uploadLastProgress = millis();
+        uploadBytesThisFile = 0;
         uploadDir = server->arg("dir");
         if (uploadDir.isEmpty()) uploadDir = "/";
         if (uploadDir != "/" && !uploadDir.endsWith("/")) uploadDir += "/";
@@ -1176,51 +1496,65 @@ void FileServer::handleUploadProcess() {
         // Security: prevent directory traversal
         String filename = upload.filename;
         if (filename.indexOf("..") >= 0 || uploadDir.indexOf("..") >= 0) {
-            Serial.println("[FILESERVER] Path traversal attempt blocked");
+            uploadRejected = true;
+            uploadActive = false;
             return;
         }
         
-        String path = uploadDir + "/" + filename;
-        if (path.startsWith("//")) path = path.substring(1);
-        Serial.printf("[FILESERVER] Upload start: %s\n", path.c_str());
+        uploadPath = uploadDir + "/" + filename;
+        if (uploadPath.startsWith("//")) uploadPath = uploadPath.substring(1);
+        logHeapStatusIfLow("before upload");
         
-        uploadFile = SD.open(path, FILE_WRITE);
+        uploadFile = SD.open(uploadPath, FILE_WRITE);
         if (!uploadFile) {
-            Serial.println("[FILESERVER] Failed to open file for writing");
+            uploadRejected = true;
+            uploadActive = false;
         }
     } else if (upload.status == UPLOAD_FILE_WRITE) {
         if (uploadFile) {
             uploadFile.write(upload.buf, upload.currentSize);
+            sessionRxBytes += upload.currentSize;
+            uploadLastProgress = millis();
+            uploadBytesThisFile += upload.currentSize;
+            yield();
         }
     } else if (upload.status == UPLOAD_FILE_END) {
         if (uploadFile) {
             uploadFile.close();
-            Serial.printf("[FILESERVER] Upload complete: %u bytes\n", upload.totalSize);
+            sessionUploadCount++;
         }
+        uploadActive = false;
+        uploadRejected = false;
     } else if (upload.status == UPLOAD_FILE_ABORTED) {
         // Client disconnected or error - close file to prevent leak
         if (uploadFile) {
             uploadFile.close();
-            Serial.println("[FILESERVER] Upload aborted - file handle closed");
         }
+        uploadActive = false;
+        uploadRejected = false;
     }
 }
 
 // Recursive delete helper - properly handles nested directories
 bool FileServer::deletePathRecursive(const String& path) {
     File f = SD.open(path);
-    if (!f) return false;
+    if (!f) {
+        return false;
+    }
     
     bool isDir = f.isDirectory();
     f.close();
     
     if (!isDir) {
-        return SD.remove(path);
+        bool ok = SD.remove(path);
+        return ok;
     }
     
     // It's a directory - delete all contents first (depth-first)
     File dir = SD.open(path);
-    if (!dir) return false;
+    if (!dir) {
+        return false;
+    }
     
     File entry = dir.openNextFile();
     while (entry) {
@@ -1245,18 +1579,26 @@ bool FileServer::deletePathRecursive(const String& path) {
     dir.close();
     
     // Now remove the empty directory
-    return SD.rmdir(path);
+    bool ok = SD.rmdir(path);
+    return ok;
 }
 
 void FileServer::handleDelete() {
     String path = server->arg("f");
+    logRequest(server, "REQ");
+    if (isTransferBusy()) {
+        sendBusyResponse(server);
+        return;
+    }
     if (path.isEmpty()) {
+        server->sendHeader("Connection", "close");
         server->send(400, "text/plain", "Missing path");
         return;
     }
     
     // Security: prevent directory traversal
     if (path.indexOf("..") >= 0) {
+        server->sendHeader("Connection", "close");
         server->send(400, "text/plain", "Invalid path");
         return;
     }
@@ -1264,16 +1606,23 @@ void FileServer::handleDelete() {
     bool success = deletePathRecursive(path);
     
     if (success) {
+        server->sendHeader("Connection", "close");
         server->send(200, "text/plain", "Deleted");
-        Serial.printf("[FILESERVER] Deleted: %s\n", path.c_str());
-    } else {
+        } else {
+        server->sendHeader("Connection", "close");
         server->send(500, "text/plain", "Delete failed");
-    }
+        }
 }
 
 void FileServer::handleBulkDelete() {
+    logRequest(server, "REQ");
+    if (isTransferBusy()) {
+        sendBusyResponse(server);
+        return;
+    }
     // Read JSON body
     if (!server->hasArg("plain")) {
+        server->sendHeader("Connection", "close");
         server->send(400, "application/json", "{\"error\":\"Missing body\"}");
         return;
     }
@@ -1287,6 +1636,7 @@ void FileServer::handleBulkDelete() {
     
     int idx = body.indexOf("\"paths\"");
     if (idx < 0) {
+        server->sendHeader("Connection", "close");
         server->send(400, "application/json", "{\"error\":\"Missing paths array\"}");
         return;
     }
@@ -1294,6 +1644,7 @@ void FileServer::handleBulkDelete() {
     int arrStart = body.indexOf('[', idx);
     int arrEnd = body.indexOf(']', arrStart);
     if (arrStart < 0 || arrEnd < 0) {
+        server->sendHeader("Connection", "close");
         server->send(400, "application/json", "{\"error\":\"Invalid paths array\"}");
         return;
     }
@@ -1320,8 +1671,7 @@ void FileServer::handleBulkDelete() {
         
         if (deletePathRecursive(path)) {
             deleted++;
-            Serial.printf("[FILESERVER] Bulk deleted: %s\n", path.c_str());
-        } else {
+            } else {
             failed++;
         }
         
@@ -1329,100 +1679,141 @@ void FileServer::handleBulkDelete() {
     }
     
     String response = "{\"deleted\":" + String(deleted) + ",\"failed\":" + String(failed) + "}";
+    server->sendHeader("Connection", "close");
     server->send(200, "application/json", response);
-}
+    }
 
 void FileServer::handleMkdir() {
     String path = server->arg("f");
+    logRequest(server, "REQ");
+    if (isTransferBusy()) {
+        sendBusyResponse(server);
+        return;
+    }
     if (path.isEmpty()) {
+        server->sendHeader("Connection", "close");
         server->send(400, "text/plain", "Missing path");
         return;
     }
     
     // Security: prevent directory traversal
     if (path.indexOf("..") >= 0) {
+        server->sendHeader("Connection", "close");
         server->send(400, "text/plain", "Invalid path");
         return;
     }
     
     if (SD.mkdir(path)) {
+        server->sendHeader("Connection", "close");
         server->send(200, "text/plain", "Created");
-        Serial.printf("[FILESERVER] Created folder: %s\n", path.c_str());
-    } else {
+        } else {
+        server->sendHeader("Connection", "close");
         server->send(500, "text/plain", "Create folder failed");
-    }
+        }
 }
 
 void FileServer::handleRename() {
     String oldPath = server->arg("old");
     String newPath = server->arg("new");
+    logRequest(server, "REQ");
+    if (isTransferBusy()) {
+        sendBusyResponse(server);
+        return;
+    }
     
     if (oldPath.isEmpty() || newPath.isEmpty()) {
+        server->sendHeader("Connection", "close");
         server->send(400, "application/json", "{\"success\":false,\"error\":\"Missing path\"}");
         return;
     }
     
     // Security: prevent directory traversal
     if (oldPath.indexOf("..") >= 0 || newPath.indexOf("..") >= 0) {
+        server->sendHeader("Connection", "close");
         server->send(400, "application/json", "{\"success\":false,\"error\":\"Invalid path\"}");
         return;
     }
     
     if (SD.rename(oldPath, newPath)) {
-        Serial.printf("[FILESERVER] Renamed: %s -> %s\n", oldPath.c_str(), newPath.c_str());
+        server->sendHeader("Connection", "close");
         server->send(200, "application/json", "{\"success\":true}");
     } else {
+        server->sendHeader("Connection", "close");
         server->send(500, "application/json", "{\"success\":false,\"error\":\"Rename failed\"}");
-    }
+        }
 }
 
 bool FileServer::copyFileChunked(const String& srcPath, const String& dstPath) {
+    // Copy a file in chunks to limit heap usage and avoid large temporary allocations.
+    // Use a smaller chunk size than the default 4 KiB to reduce the chance of fragmenting
+    // the heap. Allocate the buffer with heap_caps_malloc() so that allocation can
+    // pull from the largest available block (8‑bit internal heap) and fail gracefully.
+
     File src = SD.open(srcPath, FILE_READ);
-    if (!src) return false;
-    
+    if (!src) {
+        return false;
+    }
+
     File dst = SD.open(dstPath, FILE_WRITE);
     if (!dst) {
         src.close();
         return false;
     }
-    
-    #define COPY_CHUNK_SIZE 4096
+
+    // Use a larger 4 KiB copy buffer to balance performance and memory usage. Allocate
+    // with standard malloc to avoid heap fragmentation issues; the Arduino heap
+    // allocator will pull from available 8‑bit internal RAM. 4 KiB is the original
+    // upstream chunk size and works well for SD cards.
+    const size_t COPY_CHUNK_SIZE = 4096;
     uint8_t* buf = (uint8_t*)malloc(COPY_CHUNK_SIZE);
     if (!buf) {
         src.close();
         dst.close();
         return false;
     }
-    
+
     bool success = true;
+    size_t total = 0;
     while (src.available()) {
-        size_t bytes = src.read(buf, COPY_CHUNK_SIZE);
-        if (dst.write(buf, bytes) != bytes) {
+        size_t bytesToRead = COPY_CHUNK_SIZE;
+        if (bytesToRead > src.available()) {
+            bytesToRead = src.available();
+        }
+        size_t bytesRead = src.read(buf, bytesToRead);
+        if (bytesRead == 0) {
+            break;
+        }
+        if (dst.write(buf, bytesRead) != bytesRead) {
             success = false;
             break;
         }
+        total += bytesRead;
         yield();  // Feed watchdog during long copies
     }
-    
+
     free(buf);
     src.close();
     dst.close();
-    
+
     if (!success) {
-        SD.remove(dstPath);  // Clean up partial copy
+        // Clean up partial copy on failure to avoid orphan files consuming space.
+        SD.remove(dstPath);
     }
-    
     return success;
 }
 
 bool FileServer::copyPathRecursive(const String& srcPath, const String& dstPath) {
     File src = SD.open(srcPath);
-    if (!src) return false;
+    if (!src) {
+        return false;
+    }
     
     if (src.isDirectory()) {
         src.close();
         
-        if (!SD.mkdir(dstPath)) return false;
+        if (!SD.mkdir(dstPath)) {
+            return false;
+        }
         
         File dir = SD.open(srcPath);
         File entry;
@@ -1451,25 +1842,31 @@ bool FileServer::copyPathRecursive(const String& srcPath, const String& dstPath)
 }
 
 void FileServer::handleCopy() {
+    logRequest(server, "REQ");
+    if (isTransferBusy()) {
+        sendBusyResponse(server);
+        return;
+    }
     if (!server->hasArg("plain")) {
+        server->sendHeader("Connection", "close");
         server->send(400, "application/json", "{\"success\":false,\"error\":\"No body\"}");
         return;
     }
     
     String body = server->arg("plain");
-    
     // Parse dest folder
     int destIdx = body.indexOf("\"dest\"");
     if (destIdx < 0) {
+        server->sendHeader("Connection", "close");
         server->send(400, "application/json", "{\"success\":false,\"error\":\"Missing dest\"}");
         return;
     }
     int destStart = body.indexOf('"', body.indexOf(':', destIdx)) + 1;
     int destEnd = body.indexOf('"', destStart);
     String destDir = body.substring(destStart, destEnd);
-    
     // Security check
     if (destDir.indexOf("..") >= 0) {
+        server->sendHeader("Connection", "close");
         server->send(400, "application/json", "{\"success\":false,\"error\":\"Invalid dest\"}");
         return;
     }
@@ -1477,6 +1874,7 @@ void FileServer::handleCopy() {
     // Parse files array
     int filesIdx = body.indexOf("\"files\"");
     if (filesIdx < 0) {
+        server->sendHeader("Connection", "close");
         server->send(400, "application/json", "{\"success\":false,\"error\":\"Missing files\"}");
         return;
     }
@@ -1484,6 +1882,7 @@ void FileServer::handleCopy() {
     int arrStart = body.indexOf('[', filesIdx);
     int arrEnd = body.indexOf(']', arrStart);
     if (arrStart < 0 || arrEnd < 0) {
+        server->sendHeader("Connection", "close");
         server->send(400, "application/json", "{\"success\":false,\"error\":\"Invalid files array\"}");
         return;
     }
@@ -1515,7 +1914,6 @@ void FileServer::handleCopy() {
         
         if (copyPathRecursive(srcPath, dstPath)) {
             copied++;
-            Serial.printf("[FILESERVER] Copied: %s -> %s\n", srcPath.c_str(), dstPath.c_str());
         } else {
             failed++;
         }
@@ -1524,28 +1922,35 @@ void FileServer::handleCopy() {
     }
     
     String response = "{\"success\":true,\"copied\":" + String(copied) + ",\"failed\":" + String(failed) + "}";
+    server->sendHeader("Connection", "close");
     server->send(200, "application/json", response);
 }
 
 void FileServer::handleMove() {
+    logRequest(server, "REQ");
+    if (isTransferBusy()) {
+        sendBusyResponse(server);
+        return;
+    }
     if (!server->hasArg("plain")) {
+        server->sendHeader("Connection", "close");
         server->send(400, "application/json", "{\"success\":false,\"error\":\"No body\"}");
         return;
     }
     
     String body = server->arg("plain");
-    
     // Parse dest folder
     int destIdx = body.indexOf("\"dest\"");
     if (destIdx < 0) {
+        server->sendHeader("Connection", "close");
         server->send(400, "application/json", "{\"success\":false,\"error\":\"Missing dest\"}");
         return;
     }
     int destStart = body.indexOf('"', body.indexOf(':', destIdx)) + 1;
     int destEnd = body.indexOf('"', destStart);
     String destDir = body.substring(destStart, destEnd);
-    
     if (destDir.indexOf("..") >= 0) {
+        server->sendHeader("Connection", "close");
         server->send(400, "application/json", "{\"success\":false,\"error\":\"Invalid dest\"}");
         return;
     }
@@ -1553,6 +1958,7 @@ void FileServer::handleMove() {
     // Parse files array
     int filesIdx = body.indexOf("\"files\"");
     if (filesIdx < 0) {
+        server->sendHeader("Connection", "close");
         server->send(400, "application/json", "{\"success\":false,\"error\":\"Missing files\"}");
         return;
     }
@@ -1560,6 +1966,7 @@ void FileServer::handleMove() {
     int arrStart = body.indexOf('[', filesIdx);
     int arrEnd = body.indexOf(']', arrStart);
     if (arrStart < 0 || arrEnd < 0) {
+        server->sendHeader("Connection", "close");
         server->send(400, "application/json", "{\"success\":false,\"error\":\"Invalid files array\"}");
         return;
     }
@@ -1592,13 +1999,10 @@ void FileServer::handleMove() {
         // Try SD.rename first (fast, atomic)
         if (SD.rename(srcPath, dstPath)) {
             moved++;
-            Serial.printf("[FILESERVER] Moved: %s -> %s\n", srcPath.c_str(), dstPath.c_str());
-        } 
-        // Fallback to copy+delete for cross-filesystem moves
-        else if (copyPathRecursive(srcPath, dstPath)) {
+        } else if (copyPathRecursive(srcPath, dstPath)) {
+            // Fallback to copy+delete for cross-filesystem moves
             if (deletePathRecursive(srcPath)) {
                 moved++;
-                Serial.printf("[FILESERVER] Moved (copy+del): %s -> %s\n", srcPath.c_str(), dstPath.c_str());
             } else {
                 // Rollback: delete the copy
                 deletePathRecursive(dstPath);
@@ -1612,13 +2016,17 @@ void FileServer::handleMove() {
     }
     
     String response = "{\"success\":true,\"moved\":" + String(moved) + ",\"failed\":" + String(failed) + "}";
+    server->sendHeader("Connection", "close");
     server->send(200, "application/json", response);
 }
 
 void FileServer::handleNotFound() {
+    logRequest(server, "REQ");
+    server->sendHeader("Connection", "close");
     server->send(404, "text/plain", "Not found");
 }
 
 const char* FileServer::getHTML() {
     return HTML_TEMPLATE;
 }
+

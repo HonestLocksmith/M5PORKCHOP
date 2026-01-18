@@ -3,6 +3,8 @@
 #include "boar_bros_menu.h"
 #include <M5Cardputer.h>
 #include <SD.h>
+#include <ctype.h>
+#include <string.h>
 #include "display.h"
 #include "../modes/oink.h"
 
@@ -79,7 +81,9 @@ void BoarBrosMenu::loadBros() {
             if (valid) {
                 BroInfo info;
                 info.bssid = bssid;
-                info.bssidStr = formatBSSID(bssid);
+                char bssidBuf[18];
+                formatBSSID(bssid, bssidBuf, sizeof(bssidBuf));
+                info.bssidStr = bssidBuf;
                 
                 // Extract SSID from rest of line (after space)
                 if (line.length() > 13) {
@@ -98,28 +102,33 @@ void BoarBrosMenu::loadBros() {
     Serial.printf("[BOAR_BROS] Loaded %d bros\n", (int)bros.size());
 }
 
-String BoarBrosMenu::formatBSSID(uint64_t bssid) {
-    char buf[18];
-    snprintf(buf, sizeof(buf), "%02X:%02X:%02X:%02X:%02X:%02X",
+void BoarBrosMenu::formatBSSID(uint64_t bssid, char* out, size_t len) {
+    if (!out || len == 0) return;
+    snprintf(out, len, "%02X:%02X:%02X:%02X:%02X:%02X",
              (uint8_t)((bssid >> 40) & 0xFF),
              (uint8_t)((bssid >> 32) & 0xFF),
              (uint8_t)((bssid >> 24) & 0xFF),
              (uint8_t)((bssid >> 16) & 0xFF),
              (uint8_t)((bssid >> 8) & 0xFF),
              (uint8_t)(bssid & 0xFF));
-    return String(buf);
 }
 
 size_t BoarBrosMenu::getCount() {
     return OinkMode::getExcludedCount();
 }
 
-String BoarBrosMenu::getSelectedInfo() {
-    if (bros.empty()) return "[B] ADD FROM OINK MODE";
-    if (selectedIndex < bros.size()) {
-        return bros[selectedIndex].bssidStr;
+void BoarBrosMenu::getSelectedInfo(char* out, size_t len) {
+    if (!out || len == 0) return;
+    if (bros.empty()) {
+        snprintf(out, len, "[B] ADD FROM OINK MODE");
+        return;
     }
-    return "";
+    if (selectedIndex < bros.size()) {
+        strncpy(out, bros[selectedIndex].bssidStr.c_str(), len - 1);
+        out[len - 1] = '\0';
+        return;
+    }
+    out[0] = '\0';
 }
 
 void BoarBrosMenu::update() {
@@ -146,7 +155,7 @@ void BoarBrosMenu::handleInput() {
             deleteSelected();
             deleteConfirmActive = false;
         } else if (M5Cardputer.Keyboard.isKeyPressed('n') || M5Cardputer.Keyboard.isKeyPressed('N') ||
-                   M5Cardputer.Keyboard.isKeyPressed('`') || keys.enter) {
+                   M5Cardputer.Keyboard.isKeyPressed(KEY_BACKSPACE) || keys.enter) {
             deleteConfirmActive = false;  // Cancel
         }
         return;
@@ -176,8 +185,8 @@ void BoarBrosMenu::handleInput() {
         deleteConfirmActive = true;
     }
     
-    // Backtick or Backspace - exit
-    if (M5Cardputer.Keyboard.isKeyPressed('`') || M5Cardputer.Keyboard.isKeyPressed(KEY_BACKSPACE)) {
+    // Backspace - go back
+    if (M5Cardputer.Keyboard.isKeyPressed(KEY_BACKSPACE)) {
         hide();
         // Return to menu handled by porkchop.cpp
     }
@@ -202,8 +211,7 @@ void BoarBrosMenu::deleteSelected() {
         scrollOffset = bros.size() > 0 ? bros.size() - 1 : 0;
     }
     
-    Display::showToast("BRO REMOVED!");
-    delay(500);
+    Display::notify(NoticeKind::STATUS, "BRO REMOVED!");
 }
 
 void BoarBrosMenu::draw(M5Canvas& canvas) {
@@ -240,11 +248,17 @@ void BoarBrosMenu::draw(M5Canvas& canvas) {
         
         // SSID or "NONAME BRO" for hidden networks
         canvas.setCursor(4, y);
-        String displayName = bro.ssid.length() > 0 ? bro.ssid : "NONAME BRO";
-        displayName.toUpperCase();
-        if (displayName.length() > 14) {
-            displayName = displayName.substring(0, 12) + "..";
-// 
+        const char* nameSrc = bro.ssid.length() > 0 ? bro.ssid.c_str() : "NONAME BRO";
+        char displayName[20];
+        size_t pos = 0;
+        while (*nameSrc && pos + 1 < sizeof(displayName)) {
+            displayName[pos++] = (char)toupper((unsigned char)*nameSrc++);
+        }
+        displayName[pos] = '\0';
+        if (pos > 14 && sizeof(displayName) > 14) {
+            displayName[12] = '.';
+            displayName[13] = '.';
+            displayName[14] = '\0';
         }
         canvas.print(displayName);
         
@@ -290,10 +304,19 @@ void BoarBrosMenu::drawDeleteConfirm(M5Canvas& canvas) {
     
     canvas.drawString("REMOVE THIS BRO?", boxX + boxW / 2, boxY + 10);
     
-    String broName = bros[selectedIndex].ssid.length() > 0 ? 
-                     bros[selectedIndex].ssid : bros[selectedIndex].bssidStr;
-    broName.toUpperCase();
-    if (broName.length() > 18) broName = broName.substring(0, 16) + "..";
+    const BroInfo& bro = bros[selectedIndex];
+    const char* broSrc = bro.ssid.length() > 0 ? bro.ssid.c_str() : bro.bssidStr.c_str();
+    char broName[24];
+    size_t broPos = 0;
+    while (*broSrc && broPos + 1 < sizeof(broName)) {
+        broName[broPos++] = (char)toupper((unsigned char)*broSrc++);
+    }
+    broName[broPos] = '\0';
+    if (broPos > 18 && sizeof(broName) > 18) {
+        broName[16] = '.';
+        broName[17] = '.';
+        broName[18] = '\0';
+    }
     canvas.drawString(broName, boxX + boxW / 2, boxY + 24);
     
     canvas.drawString("[Y]ES  [N]O", boxX + boxW / 2, boxY + 40);

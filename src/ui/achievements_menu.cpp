@@ -4,6 +4,8 @@
 #include <M5Cardputer.h>
 #include "display.h"
 #include "../core/xp.h"
+#include <ctype.h>
+#include <string.h>
 
 // Static member initialization
 uint8_t AchievementsMenu::selectedIndex = 0;
@@ -66,7 +68,7 @@ static const struct {
     { ACH_ROGUE_SPOTTER,  "R0GUE SP0TTER",  "ML detects a rogue AP" },
     { ACH_HIDDEN_MASTER,  "H1DDEN MAST3R",  "Find 50 hidden networks" },
     { ACH_WPA3_HUNTER,    "WPA3 HUNT3R",    "Find 25 WPA3 networks" },
-    { ACH_MAX_LEVEL,      "MAX L3VEL",      "Reach level 40" },
+    { ACH_MAX_LEVEL,      "MAX L3VEL",      "Reach level 50" },
     { ACH_ABOUT_JUNKIE,   "AB0UT_JUNK13",   "Read the fine print" },
     // DO NO HAM achievements (v0.1.4+) - pacifist/stealth playstyle
     { ACH_GOING_DARK,     "G01NG D4RK",     "5 minutes in passive mode" },
@@ -164,8 +166,8 @@ void AchievementsMenu::handleInput() {
         return;
     }
     
-    // Exit with backtick
-    if (M5Cardputer.Keyboard.isKeyPressed('`')) {
+    // Backspace - go back
+    if (M5Cardputer.Keyboard.isKeyPressed(KEY_BACKSPACE)) {
         hide();
     }
 }
@@ -255,8 +257,12 @@ void AchievementsMenu::drawDetail(M5Canvas& canvas) {
     
     // How to get it - with word wrap for long descriptions
     const char* howTo = hasIt ? ACHIEVEMENTS[selectedIndex].howTo : "???";
-    String desc = String(howTo);
-    desc.toUpperCase();  // PIG SCREAMS
+    char descBuf[128];
+    strncpy(descBuf, howTo, sizeof(descBuf) - 1);
+    descBuf[sizeof(descBuf) - 1] = '\0';
+    for (size_t i = 0; descBuf[i]; i++) {
+        descBuf[i] = (char)toupper((unsigned char)descBuf[i]);
+    }
     int maxCharsPerLine = 28;  // Fits ~200px text area
     int lineHeight = 12;
     int textY = boxY + 40;
@@ -264,21 +270,32 @@ void AchievementsMenu::drawDetail(M5Canvas& canvas) {
     
     // Word wrap: split into lines
     int lineNum = 0;
-    while (desc.length() > 0 && lineNum < 3) {
-        String line;
-        if ((int)desc.length() <= maxCharsPerLine) {
-            line = desc;
-            desc = "";
-        } else {
-            int splitPos = desc.lastIndexOf(' ', maxCharsPerLine);
-            if (splitPos < 1) {
-                splitPos = maxCharsPerLine;  // Hard break
+    const char* cursor = descBuf;
+    while (*cursor && lineNum < 3) {
+        size_t remaining = strlen(cursor);
+        size_t take = remaining <= (size_t)maxCharsPerLine ? remaining : (size_t)maxCharsPerLine;
+        size_t splitPos = take;
+        if (remaining > (size_t)maxCharsPerLine) {
+            for (size_t i = take; i > 0; i--) {
+                if (cursor[i - 1] == ' ') {
+                    splitPos = i - 1;
+                    break;
+                }
             }
-            line = desc.substring(0, splitPos);
-            desc = desc.substring(splitPos + 1);
+            if (splitPos == 0) {
+                splitPos = take;  // Hard break
+            }
         }
-        canvas.drawString(line, centerX, textY + lineNum * lineHeight);
+
+        char lineBuf[32];
+        size_t copyLen = splitPos < sizeof(lineBuf) - 1 ? splitPos : sizeof(lineBuf) - 1;
+        memcpy(lineBuf, cursor, copyLen);
+        lineBuf[copyLen] = '\0';
+        canvas.drawString(lineBuf, centerX, textY + lineNum * lineHeight);
         lineNum++;
+
+        cursor += splitPos;
+        while (*cursor == ' ') cursor++;
     }
     
     // Reset text datum

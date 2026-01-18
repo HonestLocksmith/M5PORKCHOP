@@ -42,6 +42,10 @@ public:
     static uint32_t getLastActivityTime();  // For buff/debuff idle detection
     static void adjustHappiness(int delta);  // Direct happiness adjustment
     
+    // Dialogue lock - prevents automatic phrase selection during BLE sync dialogue
+    static void setDialogueLock(bool locked);
+    static bool isDialogueLocked();
+    
     // Phase 6: Public for phrase chaining helper functions
     static String currentPhrase;
     static uint32_t lastPhraseChange;

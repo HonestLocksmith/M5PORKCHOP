@@ -3,6 +3,7 @@
 
 #include <Arduino.h>
 #include <functional>
+#include "ml_config.h"
 #include "features.h"
 
 // Model labels
@@ -25,6 +26,7 @@ struct MLResult {
 
 typedef std::function<void(MLResult)> MLCallback;
 
+#if PORKCHOP_ENABLE_ML
 class MLInference {
 public:
     static void init();
@@ -68,3 +70,24 @@ private:
     static MLResult runInference(const float* input, size_t size);
     static bool validateModel(const uint8_t* data, size_t size);
 };
+#else
+// ML disabled: provide no-op stubs to keep callers compiling without pulling model
+class MLInference {
+public:
+    static void init() {}
+    static void update() {}
+    static MLResult classify(const float*, size_t) { return {MLLabel::UNKNOWN, 0.0f, {0}, 0, false}; }
+    static MLResult classifyNetwork(const WiFiFeatures&) { return {MLLabel::UNKNOWN, 0.0f, {0}, 0, false}; }
+    static void classifyAsync(const float*, size_t, MLCallback) {}
+    static bool loadModel(const char*) { return false; }
+    static bool saveModel(const char*) { return false; }
+    static bool updateModel(const uint8_t*, size_t) { return false; }
+    static const char* getModelVersion() { return "ML-OFF"; }
+    static size_t getModelSize() { return 0; }
+    static bool isModelLoaded() { return false; }
+    static bool checkForUpdate(const char*) { return false; }
+    static bool downloadAndUpdate(const char*, bool = true) { return false; }
+    static uint32_t getInferenceCount() { return 0; }
+    static uint32_t getAvgInferenceTimeUs() { return 0; }
+};
+#endif

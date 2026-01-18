@@ -4,10 +4,12 @@
 #include <Arduino.h>
 #include <esp_wifi.h>
 #include <vector>
+#include "ml_config.h"
 
 // Feature vector size for Edge Impulse model
 #define FEATURE_VECTOR_SIZE 32
 
+#if PORKCHOP_ENABLE_ML
 struct WiFiFeatures {
     // Signal characteristics
     int8_t rssi;
@@ -90,3 +92,29 @@ private:
     static bool isRandomMAC(const uint8_t* mac);
     static float normalize(float value, float mean, float std);
 };
+#else
+// ML disabled: provide lightweight stubs so callers compile without pulling ML code
+struct WiFiFeatures {
+    int8_t rssi{0};
+    int8_t noise{-95};
+    float snr{0.0f};
+    uint16_t beaconCount{0};
+};
+
+struct ProbeFeatures {
+    uint8_t reserved{0};
+};
+
+class FeatureExtractor {
+public:
+    static void init() {}
+    static WiFiFeatures extractFromScan(const wifi_ap_record_t*) { return WiFiFeatures(); }
+    static WiFiFeatures extractFromBeacon(const uint8_t*, uint16_t, int8_t) { return WiFiFeatures(); }
+    static WiFiFeatures extractBasic(int8_t, uint8_t, wifi_auth_mode_t) { return WiFiFeatures(); }
+    static ProbeFeatures extractFromProbe(const uint8_t*, uint16_t, int8_t) { return ProbeFeatures(); }
+    static void toFeatureVector(const WiFiFeatures&, float*) {}
+    static void probeToFeatureVector(const ProbeFeatures&, float*) {}
+    static std::vector<float> extractBatchFeatures(const std::vector<WiFiFeatures>&) { return {}; }
+    static void setNormalizationParams(const float*, const float*) {}
+};
+#endif

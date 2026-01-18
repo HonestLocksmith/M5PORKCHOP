@@ -20,7 +20,7 @@ public:
     static void draw(M5Canvas& canvas);
     static bool isActive() { return active; }
     static size_t getCount();
-    static String getSelectedInfo();
+    static void getSelectedInfo(char* out, size_t len);
     
 private:
     static std::vector<BroInfo> bros;
@@ -36,5 +36,5 @@ private:
     static void loadBros();
     static void deleteSelected();
     static void drawDeleteConfirm(M5Canvas& canvas);
-    static String formatBSSID(uint64_t bssid);
+    static void formatBSSID(uint64_t bssid, char* out, size_t len);
 };

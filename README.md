@@ -1,47 +1,24 @@
---[ Quick Start - The Only Way That Matters
+--[ Quick Start - the only way that matters
 
-    grab firmware from GitHub releases. flash however you want.
-    
-    M5 Launcher? M5 Burner? esptool? web flasher? OTA? all work now.
-    pick your poison. pig doesn't judge. pig recovers.
-    
-        1. github.com/0ct0sec/M5PORKCHOP/releases
-        2. download. flash. oink.
-        3. (first timer? check IMMORTAL PIG note below. tiny scroll.)
-    
-    XP preserved forever. your MUDGE UNCHA1NED grind stays intact.
-    
-    NEW IN v0.1.7_DNKROZ: CHRISTMAS BUILD. pig delivers presents.
-    
-        PCAP OVERHAUL - M1 M2 M3 M4 EAPOL frames. labeled. in order.
-        radiotap headers that don't lie. wpa-sec.com full compliance.
-        their validator no longer cries. hashcat 22000 ready. no excuses.
-        scripts/wpasec_check.py included. verify before you upload.
-        
-        PORKCHOP COMMANDER - dual-pane file manager. norton would weep.
-        F-keys at the bottom like god intended. multi-select with space.
-        copy, move, rename, delete. tab between panes. keyboard nav.
-        press 'F' from IDLE. because TransFer has F in it.
-        
-        UNLOCKABLES - pig has secrets. SHA256 validates the worthy.
-        the pig whispers through tubes. if you know, you know.
-        
-        SESSION CHALLENGES - three trials per boot. EASY MEDIUM HARD.
-        the pig talks when bored. complete all three for bonus.
-    
-    IMMORTAL PIG (v0.1.6+): why flashing method doesn't matter anymore.
-    
-        XP backs up to SD card. automatically. every save.
-        M5 Burner nukes NVS? pig recovers from SD on boot.
-        full chip erase? pig recovers. OTA flash? pig recovers.
-        
-        THE CATCH: first install must be v0.1.6+ to create the backup.
-        no backup = no recovery. install once properly, flash freely after.
-        
-        backup location: /xp_backup.bin on SD card root.
-        device-bound. signed. tamper-resistant. earned, not copied.
-    
-    the pig remembers. the pig always remembers.
+    fetch a release. flash however you like. pig doesn't care.
+
+        - github.com/0ct0sec/M5PORKCHOP/releases
+        - download. flash. oink.
+        - first timer? read IMMORTAL PIG below.
+
+    xp persists when you start from v0.1.6+. backup protects progression.
+
+    highlights (v0.1.7):
+        - cleaner pcap & ordered EAPOL exports (hashcat 22000-ready)
+        - porkchop commander: dual-pane file manager, keyboard-friendly
+        - unlockables & session challenges - earn the secrets
+
+    IMMORTAL PIG (v0.1.6+):
+        xp auto-backs up to SD. recover after burners, OTA, full-erase.
+        first install must be v0.1.6+ to create the backup.
+        backup location: /xp_backup.bin (device-bound, not transferrable)
+
+    the pig remembers. oink.
 
 
 --[ Contents
@@ -959,13 +936,9 @@
 
 ----[ 3.13 - Unlockables
 
-    two secrets hide in the unlockables menu. SHA256 validated.
-    type the phrase, press enter, watch the hash match or fail.
+    two secret unlockables live in the menu. SHA256 validated.
+    we won't publish the phrases here. find them while you play.
 
-        PROPHECY    THE PROPHECY SPEAKS THE KEY
-        1MM0RT4L    PIG SURVIVES M5BURNER
-
-    Al Gore's tubes carry more than challenges. same settings.
     the pig whispers if you listen.
 
 
@@ -1251,41 +1224,39 @@
 
 ----[ 7.2 - API Keys Setup
 
-    cloud features need credentials. the pig doesn't store them in
-    flash - they live in config after you import from SD.
+    cloud features need credentials. we do NOT store keys in the repo.
+    prefer SD import so secrets never get typed or pasted into a UI.
 
+    wigle (wigle.net) - wardrive uploads:
+        - create account, generate API name + token
+        - put on SD as /wigle_key.txt with: apiname:apitoken
+        - import via Settings -> Load WiGLE Key (file deletes after import)
 
-    WiGLE (wigle.net) - for wardrive uploads:
+    wpa-sec (wpa-sec.stanev.org) - distributed cracking:
+        - register and copy your 32-char hex key
+        - put on SD as /wpasec_key.txt containing only the key
+        - import via Settings -> Load WPA-SEC Key (auto-import on boot)
 
-        1. create account at wigle.net
-        2. go to Account -> API Token section
-        3. generate or copy your API name and token
-        4. create file on SD card root: /wigle_key.txt
-        5. format: apiname:apitoken (one line, colon separator)
-        6. in PORKCHOP: Settings -> < Load WiGLE Key >
-        7. file auto-deletes after import
+    security note:
+        - never commit keys or paste them in public logs
+        - use SD-only import and delete files after use
+        - treat keys like passwords; don't share them
 
-        now PORK TRACKS menu can upload your wardrives.
+I read fileserver.cpp end‑to‑end. Here is the forensic RCA for the file‑transfer / web‑UI hang, with exact code evidence.
 
+RCA (100% certain)
+Primary cause: the async download path closes the file handle immediately, then never clears downloadActive.
 
-    WPA-SEC (wpa-sec.stanev.org) - for distributed cracking:
+In handleDownload() you open a local File file = SD.open(path); and then assign downloadFile = file; before returning.
+When handleDownload() returns, the local file goes out of scope and its destructor closes the underlying file handle.
+In updateRunning(), the pump calls downloadFile.read(...). With the handle already closed, read() returns 0.
+The code treats readBytes == 0 as “break out of the loop” without closing the connection or clearing downloadActive. That leaves the download permanently stuck and blocks new downloads (downloadActive stays true).
+This perfectly matches your logs: you always see before /download and then nothing else.
+Evidence points in the file:
 
-        1. register at wpa-sec.stanev.org
-        2. get your 32-character hex API key from profile
-        3. create file on SD card root: /wpasec_key.txt
-        4. contents: just the key, nothing else
-        5. in PORKCHOP: Settings -> < Load WPA-SEC Key >
-           or just reboot - auto-imports on boot
-        6. file self-destructs after import
-
-        now LOOT menu can upload handshakes and fetch results.
-
-
-    why the file dance? no USB keyboard on the Cardputer for entering
-    64 character strings. SD card is faster. file deletion is paranoia.
-    the pig doesn't judge your OpSec. the pig just oinks and forgets.
-
-
+handleDownload() around the File file = SD.open(path); block and downloadFile = file; assignment.
+updateRunning() download pump around readBytes == 0 (no cleanup on zero‑read).
+These two together make the hang deterministic.
 --[ 8 - ML Training Pipeline
 
     want to train your own model? here's the workflow:

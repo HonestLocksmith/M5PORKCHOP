@@ -30,6 +30,7 @@ public:
     static void blink();
     static void sniff();  // Trigger nose sniff animation (600ms animated cycle)
     static void wiggleEars();
+    static void cuteJump();  // Trigger cute celebratory jump (higher than walk bounce)
     
     // Direction control
     static void setFacingLeft();
@@ -37,6 +38,14 @@ public:
     
     // Attack shake (visual feedback for captures)
     static void setAttackShake(bool active, bool strong);
+    
+    // Thunder flash (invert colors for weather effect)
+    static void setThunderFlash(bool active);
+    static bool isThunderFlashing();
+
+    // Night sky star system (RTC-based)
+    static bool isNightTime();           // check rtc for night hours, 20:00-06:00
+    static bool areStarsActive();        // stars currently visible?
     
     // Walk wind-up animation (smooth slide for coast-back)
     static void startWindupSlide(int targetX, bool faceRight = false);
@@ -49,6 +58,28 @@ public:
     static void resetGrassPattern();  // Reset to random binary pattern
     
 private:
+    // Star system state
+    struct Star {
+        int16_t x;              // screen x range 0-239
+        int16_t y;              // screen y range 20-100
+        uint8_t size;           // 1-2 px radius
+        uint8_t brightness;     // 0-255, 0 means hidden
+        bool isBlinking;        // twinkle behavior
+        uint32_t fadeInStart;   // when this star started appearing
+    };
+    static Star stars[15];
+    static uint8_t starCount;
+    static constexpr uint8_t MAX_STARS = 15;
+    static uint32_t lastStarSpawn;
+    static uint32_t nextSpawnDelay;
+    static bool starsActive;
+    static uint32_t lastNightCheck;
+    static bool cachedNightMode;
+
+    static void initStarPositions();
+    static void updateStars();
+    static void drawStars(M5Canvas& canvas);
+    static void fillPigBoundingBox(M5Canvas& canvas);
     static AvatarState currentState;
     static bool isBlinking;
     static bool isSniffing;
@@ -56,6 +87,12 @@ private:
     static uint32_t lastBlinkTime;
     static uint32_t blinkInterval;
     static int moodIntensity;  // Phase 8: -100 to 100
+    
+    // Cute jump animation state
+    static bool jumpActive;
+    static uint32_t jumpStartTime;
+    static constexpr uint16_t JUMP_DURATION_MS = 400;  // Total jump time (up + down)
+    static constexpr int JUMP_HEIGHT = 8;  // Pixels to jump up
     
     // Walk transition animation
     static bool transitioning;

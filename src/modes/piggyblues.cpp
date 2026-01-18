@@ -3,6 +3,7 @@
 #include "piggyblues.h"
 #include "../core/config.h"
 #include "../core/xp.h"
+#include "../core/wifi_utils.h"
 #include "../ui/display.h"
 #include "../piglet/mood.h"
 #include "../piglet/avatar.h"
@@ -27,6 +28,8 @@ static const uint8_t  MAX_TARGETS = 50;                 // Maximum targets to tr
 static const uint8_t  MAX_ACTIVE_TARGETS = 4;           // Maximum active targets for payload selection
 static const uint8_t  MAX_TARGETS_FOR_MOOD = 255;       // Cap for uint8_t mood parameter
 static const uint32_t TARGET_STALE_TIMEOUT_MS = 10000;  // 10 seconds before target considered stale
+static const uint8_t  REBOOT_CHANCE_PERCENT = 50;       // 0-100 chance to reboot on exit
+static const uint16_t NO_REBOOT_XP_BONUS = 15;          // Bonus XP when no reboot happens
 
 // UI Constants
 static const uint16_t DIALOG_WIDTH = 200;               // Warning dialog width
@@ -56,6 +59,7 @@ uint32_t PiggyBluesMode::windowsCount = 0;
 // ============ Deferred Target System ============
 // Scan callback sets pending target, update() processes in main thread
 // Single-slot pattern (like OINK) - missing a few is acceptable
+static portMUX_TYPE pendingTargetMux = portMUX_INITIALIZER_UNLOCKED;
 static volatile bool pendingTargetAdd = false;
 static volatile bool pendingTargetBusy = false;
 static BLETarget pendingTarget;
@@ -66,14 +70,33 @@ static PiggyBluesScanCallbacks scanCallbacks;
 // ============ Scan Callback Implementation ============
 // Called from NimBLE task context - must be quick, no heavy processing
 
+static BLEVendor identifyVendorFromPayload(const std::vector<uint8_t>& payload) {
+    size_t idx = 0;
+    while (idx + 1 < payload.size()) {
+        uint8_t len = payload[idx];
+        if (len == 0) {
+            break;
+        }
+        size_t next = idx + len + 1;
+        if (next > payload.size()) {
+            break;
+        }
+        if (payload[idx + 1] == 0xFF) {  // Manufacturer data
+            const uint8_t* data = payload.data() + idx + 2;
+            size_t dataLen = len - 1;
+            return PiggyBluesMode::identifyVendor(data, dataLen);
+        }
+        idx = next;
+    }
+    return BLEVendor::UNKNOWN;
+}
+
 void PiggyBluesScanCallbacks::onResult(const NimBLEAdvertisedDevice* device) {
     // Called for each device found during continuous scan
     // Use deferred pattern: quick copy, process in main thread
     
     if (!device) return;
     if (PiggyBluesMode::advertisingNow) return;  // Skip during advertising (RF interference)
-    if (pendingTargetBusy) return;  // Main thread is processing
-    if (pendingTargetAdd) return;   // Previous target not yet consumed
     
     // Extract info quickly
     BLETarget target;
@@ -81,17 +104,16 @@ void PiggyBluesScanCallbacks::onResult(const NimBLEAdvertisedDevice* device) {
     target.rssi = device->getRSSI();
     target.lastSeen = millis();
     
-    // Identify vendor from manufacturer data
-    if (device->haveManufacturerData()) {
-        std::string mfgData = device->getManufacturerData();
-        target.vendor = PiggyBluesMode::identifyVendor((const uint8_t*)mfgData.data(), mfgData.length());
-    } else {
-        target.vendor = BLEVendor::UNKNOWN;
-    }
+    // Identify vendor from payload without heap allocations
+    target.vendor = identifyVendorFromPayload(device->getPayload());
     
     // Queue for processing
-    pendingTarget = target;
-    pendingTargetAdd = true;
+    taskENTER_CRITICAL(&pendingTargetMux);
+    if (!pendingTargetBusy && !pendingTargetAdd) {
+        pendingTarget = target;
+        pendingTargetAdd = true;
+    }
+    taskEXIT_CRITICAL(&pendingTargetMux);
 }
 
 void PiggyBluesScanCallbacks::onScanEnd(const NimBLEScanResults& results, int reason) {
@@ -99,7 +121,6 @@ void PiggyBluesScanCallbacks::onScanEnd(const NimBLEScanResults& results, int re
     // NimBLE 2.x: stop() does NOT call onScanEnd, so this only fires on unexpected termination
     // If we're still running and not advertising, restart scan
     if (PiggyBluesMode::isRunning() && !PiggyBluesMode::advertisingNow) {
-        Serial.printf("[PIGGYBLUES] Scan ended unexpectedly (reason:%d), restarting\n", reason);
         // Mark scan as stopped so startContinuousScan() will restart it
         PiggyBluesMode::scanRunning = false;
         PiggyBluesMode::startContinuousScan();
@@ -113,7 +134,6 @@ void PiggyBluesMode::startContinuousScan() {
     
     NimBLEScan* pScan = NimBLEDevice::getScan();
     if (!pScan) {
-        Serial.println("[PIGGYBLUES] Failed to get scan handle");
         return;
     }
     
@@ -128,9 +148,6 @@ void PiggyBluesMode::startContinuousScan() {
     // duration=0 means forever, continuous=true for real-time callbacks
     if (pScan->start(0, false, true)) {
         scanRunning = true;
-        Serial.println("[PIGGYBLUES] Continuous scan started");
-    } else {
-        Serial.println("[PIGGYBLUES] Failed to start scan");
     }
 }
 
@@ -143,20 +160,24 @@ void PiggyBluesMode::stopContinuousScan() {
         delay(BLE_OP_DELAY_MS);
     }
     scanRunning = false;
-    Serial.println("[PIGGYBLUES] Continuous scan stopped");
 }
 
 void PiggyBluesMode::processTargets() {
     // Process any pending target from scan callback (deferred pattern)
-    if (!pendingTargetAdd) return;
+    BLETarget newTarget;
+    bool hasTarget = false;
     
-    pendingTargetBusy = true;
+    taskENTER_CRITICAL(&pendingTargetMux);
+    if (pendingTargetAdd) {
+        pendingTargetBusy = true;
+        newTarget = pendingTarget;
+        pendingTargetAdd = false;
+        pendingTargetBusy = false;
+        hasTarget = true;
+    }
+    taskEXIT_CRITICAL(&pendingTargetMux);
     
-    // Copy pending target
-    BLETarget newTarget = pendingTarget;
-    pendingTargetAdd = false;
-    
-    pendingTargetBusy = false;
+    if (!hasTarget) return;
     
     // Upsert into targets list
     upsertTarget(newTarget);
@@ -192,8 +213,6 @@ void PiggyBluesMode::upsertTarget(const BLETarget& target) {
         snprintf(addrStr, sizeof(addrStr), "%02X:%02X:%02X:%02X:%02X:%02X",
                  target.addr[0], target.addr[1], target.addr[2],
                  target.addr[3], target.addr[4], target.addr[5]);
-        Serial.printf("[PIGGYBLUES] New device: %s RSSI:%d Vendor:%s\n", 
-                      addrStr, target.rssi, vendorStr);
         
         // Sniff animation is triggered via onPiggyBluesUpdate() when first target acquired
     }
@@ -412,7 +431,6 @@ void PiggyBluesMode::init() {
     // Validate: advDuration must not exceed burstInterval (prevents perpetual lag)
     if (cfgAdvDuration > cfgBurstInterval) {
         cfgAdvDuration = cfgBurstInterval;
-        Serial.printf("[PIGGYBLUES] WARN: advDuration capped to %dms (was > burstInterval)\n", cfgAdvDuration);
     }
     
     burstInterval = cfgBurstInterval;
@@ -430,9 +448,6 @@ void PiggyBluesMode::init() {
     
     // Reset timing state
     lastMoodUpdateTime = 0;
-    
-    Serial.printf("[PIGGYBLUES] Initialized (burst:%dms adv:%dms continuous-scan)\n",
-                  cfgBurstInterval, cfgAdvDuration);
 }
 
 bool PiggyBluesMode::showWarningDialog() {
@@ -476,13 +491,13 @@ bool PiggyBluesMode::showWarningDialog() {
         canvas.drawString("EDUCATIONAL USE ONLY!", centerX, boxY + 36);
         
         char buf[24];
-        snprintf(buf, sizeof(buf), "[Y] Yes  [`] No (%lu)", remaining);
+        snprintf(buf, sizeof(buf), "[Y] YES  [N] NO (%lu)", remaining);
         canvas.drawString(buf, centerX, boxY + 54);
         
         Display::pushAll();
         
         if (M5Cardputer.Keyboard.isChange()) {
-            if (M5Cardputer.Keyboard.isKeyPressed('`')) {
+            if (M5Cardputer.Keyboard.isKeyPressed(KEY_BACKSPACE)) {
                 Display::clearBottomOverlay();
                 return false;
             }
@@ -503,15 +518,12 @@ bool PiggyBluesMode::showWarningDialog() {
 void PiggyBluesMode::start() {
     if (running) return;
     
-    Serial.println("[PIGGYBLUES] Starting...");
-    
     // Reset state for new session
     init();
     Mood::resetBLESniffState();  // Reset first-target sniff for new session
     
     // Show warning dialog
     if (!showWarningDialog()) {
-        Serial.println("[PIGGYBLUES] User aborted");
         return;
     }
     
@@ -530,7 +542,6 @@ void PiggyBluesMode::start() {
     
     pAdvertising = NimBLEDevice::getAdvertising();
     if (!pAdvertising) {
-        Serial.println("[PIGGYBLUES] Failed to get advertising handle");
         WiFi.mode(WIFI_STA);  // Re-enable WiFi on failure
         return;
     }
@@ -546,16 +557,11 @@ void PiggyBluesMode::start() {
     
     // Fast moving binary grass for chaos mode
     Avatar::setGrassSpeed(50);  // Fast chaos mode
-    Avatar::startWindupSlide(108, true);  // Slide to right position (same as sirloin hunt)
     Avatar::setGrassMoving(true);
-    
-    Serial.println("[PIGGYBLUES] Running - BLE spam active with continuous scan");
 }
 
 void PiggyBluesMode::stop() {
     if (!running) return;
-    
-    Serial.println("[PIGGYBLUES] Stopping...");
     
     // Stop continuous scan first
     stopContinuousScan();
@@ -583,12 +589,25 @@ void PiggyBluesMode::stop() {
     confirmed = false;
     targets.clear();
     activeCount = 0;
+    advertisingNow = false;
     
     Avatar::setGrassMoving(false);
     Avatar::resetGrassPattern();
     
-    Serial.printf("[PIGGYBLUES] Stopped - TX:%lu A:%lu G:%lu S:%lu W:%lu\n",
-                  totalPackets, appleCount, androidCount, samsungCount, windowsCount);
+    bool doReboot = (random(0, 100) < REBOOT_CHANCE_PERCENT);
+    if (doReboot) {
+        // Show toast and reboot - BLE stack is nuked
+        Display::showToast("BLUES SLAYED.\nDEATH DROP.\nREBOOT.");
+        delay(2000);  // Hold toast so user sees it
+        ESP.restart();
+        return;
+    }
+    
+    // No reboot this time - reward XP and restore WiFi
+    Display::showToast("BLUES SLAYED.\nJUST ROULETTE.\n+15 XP");
+    XP::addRouletteWin();
+    XP::addXPSilent(NO_REBOOT_XP_BONUS);
+    WiFiUtils::shutdown();
 }
 
 void PiggyBluesMode::update() {
@@ -685,12 +704,12 @@ void PiggyBluesMode::sendAppleJuice() {
     // Use non-connectable advertising for BLE spam
     pAdvertising->setConnectableMode(BLE_GAP_CONN_MODE_NON);
     
-    // NimBLE 2.x has strict length limits in high-level API
-    // Use direct ble_gap_adv_set_data() to set raw advertisement data
-    // Our payloads are already in correct BLE format: [len, type, data...]
-    int rc = ble_gap_adv_set_data(payload, len);
-    if (rc != 0) {
-        Serial.printf("[PIGGYBLUES] adv_set_data error: %d\n", rc);
+    // Use raw payload directly in advertisement data
+    NimBLEAdvertisementData advData;
+    if (!advData.addData(payload, len)) {
+        return;
+    }
+    if (!pAdvertising->setAdvertisementData(advData)) {
         return;
     }
     
@@ -698,17 +717,16 @@ void PiggyBluesMode::sendAppleJuice() {
     if (pAdvertising->start()) {
         delay(cfgAdvDuration);
         pAdvertising->stop();
+        totalPackets++;
+        appleCount++;
+        XP::addXP(XPEvent::BLE_APPLE);  // +3 XP
     }
-    
-    totalPackets++;
-    appleCount++;
-    XP::addXP(XPEvent::BLE_APPLE);  // +3 XP
 }
 
 void PiggyBluesMode::sendAndroidFastPair() {
     if (!pAdvertising) return;
     
-    if (NimBLEDevice::getAdvertising()->isAdvertising()) {
+    if (pAdvertising->isAdvertising()) {
         pAdvertising->stop();
     }
     
@@ -727,22 +745,23 @@ void PiggyBluesMode::sendAndroidFastPair() {
     advData.setServiceData(NimBLEUUID((uint16_t)0xFE2C), std::string((char*)serviceData, 3));
     
     pAdvertising->setConnectableMode(BLE_GAP_CONN_MODE_NON);
-    pAdvertising->setAdvertisementData(advData);
+    if (!pAdvertising->setAdvertisementData(advData)) {
+        return;
+    }
     
     if (pAdvertising->start()) {
         delay(cfgAdvDuration);
         pAdvertising->stop();
+        totalPackets++;
+        androidCount++;
+        XP::addXP(XPEvent::BLE_ANDROID);  // +2 XP
     }
-    
-    totalPackets++;
-    androidCount++;
-    XP::addXP(XPEvent::BLE_ANDROID);  // +2 XP
 }
 
 void PiggyBluesMode::sendSamsungSpam() {
     if (!pAdvertising) return;
     
-    if (NimBLEDevice::getAdvertising()->isAdvertising()) {
+    if (pAdvertising->isAdvertising()) {
         pAdvertising->stop();
     }
     
@@ -751,22 +770,23 @@ void PiggyBluesMode::sendSamsungSpam() {
     const uint8_t* payload = SAMSUNG_PAYLOADS[idx];
     size_t len = payload[0] + 1;  // payload[0] is length byte
     
-    // Use direct ble_gap_adv_set_data() for raw advertisement data
+    // Use raw payload directly in advertisement data
     pAdvertising->setConnectableMode(BLE_GAP_CONN_MODE_NON);
-    int rc = ble_gap_adv_set_data(payload, len);
-    if (rc != 0) {
-        Serial.printf("[PIGGYBLUES] Samsung adv error: %d\n", rc);
+    NimBLEAdvertisementData advData;
+    if (!advData.addData(payload, len)) {
+        return;
+    }
+    if (!pAdvertising->setAdvertisementData(advData)) {
         return;
     }
     
     if (pAdvertising->start()) {
         delay(cfgAdvDuration);
         pAdvertising->stop();
+        totalPackets++;
+        samsungCount++;
+        XP::addXP(XPEvent::BLE_SAMSUNG);  // +2 XP
     }
-    
-    totalPackets++;
-    samsungCount++;
-    XP::addXP(XPEvent::BLE_SAMSUNG);  // +2 XP
 }
 
 void PiggyBluesMode::sendWindowsSwiftPair() {
@@ -792,16 +812,17 @@ void PiggyBluesMode::sendWindowsSwiftPair() {
     advData.setName("Free Bluetooth");
     
     pAdvertising->setConnectableMode(BLE_GAP_CONN_MODE_NON);
-    pAdvertising->setAdvertisementData(advData);
+    if (!pAdvertising->setAdvertisementData(advData)) {
+        return;
+    }
     
     if (pAdvertising->start()) {
         delay(cfgAdvDuration);
         pAdvertising->stop();
+        totalPackets++;
+        windowsCount++;
+        XP::addXP(XPEvent::BLE_WINDOWS);  // +2 XP
     }
-    
-    totalPackets++;
-    windowsCount++;
-    XP::addXP(XPEvent::BLE_WINDOWS);  // +2 XP
 }
 
 void PiggyBluesMode::sendRandomPayload() {
@@ -847,4 +868,3 @@ void PiggyBluesMode::sendRandomPayload() {
         case 3: sendWindowsSwiftPair(); break;
     }
 }
-

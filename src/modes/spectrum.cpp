@@ -3,15 +3,21 @@
 #include "spectrum.h"
 #include "oink.h"
 #include "../core/config.h"
+#include "../audio/sfx.h"
 #include "../core/oui.h"
+#include "../core/stress_test.h"
 #include "../core/wsl_bypasser.h"
+#include "../core/wifi_utils.h"
 #include "../core/xp.h"
 #include "../ui/display.h"
 #include <M5Cardputer.h>
 #include <WiFi.h>
 #include <esp_wifi.h>
+#include <NimBLEDevice.h>  // For BLE coexistence check
 #include <algorithm>
 #include <cmath>
+#include <ctype.h>
+#include <string.h>
 
 // Layout constants - spectrum fills canvas above XP bar
 const int SPECTRUM_LEFT = 20;       // Space for dB labels
@@ -51,8 +57,11 @@ bool SpectrumMode::keyWasPressed = false;
 uint8_t SpectrumMode::currentChannel = 1;
 uint32_t SpectrumMode::lastHopTime = 0;
 uint32_t SpectrumMode::startTime = 0;
+SpectrumFilter SpectrumMode::filter = SpectrumFilter::ALL;
 volatile bool SpectrumMode::pendingReveal = false;
 char SpectrumMode::pendingRevealSSID[33] = {0};
+volatile bool SpectrumMode::pendingNetworkAdd = false;
+SpectrumNetwork SpectrumMode::pendingNetwork = {0};
 
 // Client monitoring state
 bool SpectrumMode::monitoringNetwork = false;
@@ -75,6 +84,24 @@ uint32_t SpectrumMode::firstDeauthTime = 0;
 bool SpectrumMode::clientDetailActive = false;
 uint8_t SpectrumMode::detailClientMAC[6] = {0};  // MAC of client being viewed
 
+// Dial mode state (tilt-to-tune when device upright)
+bool SpectrumMode::dialMode = false;
+bool SpectrumMode::dialLocked = false;
+bool SpectrumMode::dialWasUpright = false;
+uint8_t SpectrumMode::dialChannel = 7;
+float SpectrumMode::dialPositionTarget = 7.0f;
+float SpectrumMode::dialPositionSmooth = 7.0f;
+uint32_t SpectrumMode::lastDialUpdate = 0;
+uint32_t SpectrumMode::dialModeEntryTime = 0;
+volatile uint32_t SpectrumMode::ppsCounter = 0;
+uint32_t SpectrumMode::displayPps = 0;
+uint32_t SpectrumMode::lastPpsUpdate = 0;
+
+// Reveal mode state
+bool SpectrumMode::revealingClients = false;
+uint32_t SpectrumMode::revealStartTime = 0;
+uint32_t SpectrumMode::lastRevealBurst = 0;
+
 void SpectrumMode::init() {
     networks.clear();
     networks.shrink_to_fit();  // Release vector capacity
@@ -88,6 +115,9 @@ void SpectrumMode::init() {
     busy = false;
     pendingReveal = false;
     pendingRevealSSID[0] = 0;
+    pendingNetworkAdd = false;
+    memset(&pendingNetwork, 0, sizeof(pendingNetwork));
+    filter = SpectrumFilter::ALL;
     
     // Reset client monitoring state
     monitoringNetwork = false;
@@ -100,6 +130,22 @@ void SpectrumMode::init() {
     clientsDiscoveredThisSession = 0;
     pendingClientBeep = false;
     clientDetailActive = false;
+    revealingClients = false;
+    revealStartTime = 0;
+    lastRevealBurst = 0;
+    
+    // Reset dial mode state
+    dialMode = false;
+    dialLocked = false;
+    dialWasUpright = false;
+    dialChannel = 7;
+    dialPositionTarget = 7.0f;
+    dialPositionSmooth = 7.0f;
+    lastDialUpdate = 0;
+    dialModeEntryTime = 0;
+    ppsCounter = 0;
+    displayPps = 0;
+    lastPpsUpdate = 0;
 }
 
 void SpectrumMode::start() {
@@ -107,9 +153,44 @@ void SpectrumMode::start() {
     
     Serial.println("[SPECTRUM] Starting HOG ON SPECTRUM mode...");
     
+    // WiFi promiscuous mode + BLE = unstable on ESP32-S3 (see Espressif coexistence docs)
+    // If BLE was previously used (PigSyncMode, PiggyBlues), we need to deinit it first
+    // or the shared radio causes crashes. Try deinit first, reboot if it fails.
+    if (NimBLEDevice::isInitialized()) {
+        Serial.println("[SPECTRUM] BLE detected - attempting deinit for WiFi coexistence");
+        
+        // Stop any active BLE operations first
+        NimBLEScan* pScan = NimBLEDevice::getScan();
+        if (pScan && pScan->isScanning()) {
+            pScan->stop();
+            delay(100);
+        }
+        
+        NimBLEAdvertising* pAdv = NimBLEDevice::getAdvertising();
+        if (pAdv && pAdv->isAdvertising()) {
+            pAdv->stop();
+            delay(100);
+        }
+        
+        // Now deinit BLE completely (clearAll=true to reset all state)
+        bool deinitOk = NimBLEDevice::deinit(true);
+        delay(200);  // Give BLE stack time to fully shut down
+        
+        if (!deinitOk || NimBLEDevice::isInitialized()) {
+            // Deinit failed - need to reboot for clean slate
+            Display::showToast("BLE CLEANUP - REBOOTING...");
+            delay(2000);
+            ESP.restart();
+            return;  // Won't reach here, but good practice
+        }
+        
+        Serial.println("[SPECTRUM] BLE deinit successful - proceeding with WiFi promisc");
+    }
+    
     init();
     
-    // Initialize WiFi in promiscuous mode
+    // Initialize WiFi in promiscuous mode (force restart to recover from desync)
+        delay(50);
     WiFi.mode(WIFI_STA);
     
     // Randomize MAC if enabled (stealth)
@@ -147,7 +228,7 @@ void SpectrumMode::stop() {
     // [P4] Ensure monitoring is disabled
     monitoringNetwork = false;
     
-    esp_wifi_set_promiscuous(false);
+    WiFiUtils::shutdown();
     
     running = false;
     Display::setWiFiStatus(false);
@@ -170,9 +251,7 @@ void SpectrumMode::update() {
     // Process deferred client beep (from callback)
     if (pendingClientBeep) {
         pendingClientBeep = false;
-        if (Config::personality().soundEnabled) {
-            M5.Speaker.tone(1200, 80);  // Short high beep for new client
-        }
+        SFX::play(SFX::CLIENT_FOUND);
     }
     
     // Process deferred XP from onBeacon callback (avoids level-up popup crash)
@@ -183,6 +262,21 @@ void SpectrumMode::update() {
         for (uint8_t i = 0; i < xpCount; i++) {
             XP::addXP(XPEvent::NETWORK_FOUND);
         }
+    }
+    
+    // Process deferred network add from onBeacon callback (ESP32 dual-core race fix)
+    // push_back can reallocate vector, invalidating iterators in concurrent callback
+    if (pendingNetworkAdd) {
+        busy = true;  // Block callback during vector modification
+        if (networks.size() < MAX_SPECTRUM_NETWORKS) {
+            networks.push_back(pendingNetwork);
+            // Auto-select first network
+            if (selectedIndex < 0) {
+                selectedIndex = 0;
+            }
+        }
+        pendingNetworkAdd = false;
+        busy = false;
     }
     
     // [P2] Verify monitored network still exists and signal is fresh
@@ -203,12 +297,8 @@ void SpectrumMode::update() {
             // Block callback during exit sequence (has delays)
             busy = true;
             
-            // Two descending beeps for signal lost
-            if (Config::personality().soundEnabled) {
-                M5.Speaker.tone(800, 100);
-                delay(120);
-                M5.Speaker.tone(500, 150);
-            }
+            // Descending tones for signal lost - non-blocking
+            SFX::play(SFX::SIGNAL_LOST);
             Display::showToast("SIGNAL LOST");
             delay(300);  // Brief pause so user sees toast
             
@@ -220,8 +310,11 @@ void SpectrumMode::update() {
     // Handle input
     handleInput();
     
-    // Channel hopping - skip when monitoring a specific network
-    if (!monitoringNetwork) {
+    // Update dial mode (tilt-to-tune when upright)
+    updateDialChannel();
+    
+    // Channel hopping - skip when monitoring a specific network OR in dial mode
+    if (!monitoringNetwork && !dialMode) {
         if (now - lastHopTime > 100) {  // 100ms per channel = ~1.3s full sweep
             currentChannel = (currentChannel % 13) + 1;
             esp_wifi_set_channel(currentChannel, WIFI_SECOND_CHAN_NONE);
@@ -239,6 +332,11 @@ void SpectrumMode::update() {
     if (monitoringNetwork && (now - lastClientPrune > 5000)) {
         lastClientPrune = now;
         pruneStaleClients();
+    }
+    
+    // Update reveal mode (periodic broadcast deauths)
+    if (monitoringNetwork && revealingClients) {
+        updateRevealMode();
     }
     
     // N13TZSCH3 achievement - stare into the ether for 15 minutes
@@ -279,16 +377,50 @@ void SpectrumMode::handleInput() {
         viewCenterMHz = fmin(MAX_CENTER_MHZ, viewCenterMHz + PAN_STEP_MHZ);
     }
     
-    // Cycle through networks with ; and .
-    if (M5Cardputer.Keyboard.isKeyPressed(';') && !networks.empty()) {
-        selectedIndex = (selectedIndex - 1 + (int)networks.size()) % (int)networks.size();
+    // F key: cycle filter mode
+    if (M5Cardputer.Keyboard.isKeyPressed('f') || M5Cardputer.Keyboard.isKeyPressed('F')) {
+        filter = static_cast<SpectrumFilter>((static_cast<int>(filter) + 1) % 4);
+        // If selected network no longer matches filter, find first matching
         if (selectedIndex >= 0 && selectedIndex < (int)networks.size()) {
+            if (!matchesFilter(networks[selectedIndex])) {
+                selectedIndex = -1;
+                for (size_t i = 0; i < networks.size(); i++) {
+                    if (matchesFilter(networks[i])) {
+                        selectedIndex = (int)i;
+                        viewCenterMHz = channelToFreq(networks[i].channel);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    
+    // Cycle through matching networks with ; and .
+    if (M5Cardputer.Keyboard.isKeyPressed(';') && !networks.empty()) {
+        int startIdx = selectedIndex;
+        int count = 0;
+        do {
+            selectedIndex = (selectedIndex - 1 + (int)networks.size()) % (int)networks.size();
+            count++;
+        } while (!matchesFilter(networks[selectedIndex]) && count < (int)networks.size());
+        
+        if (!matchesFilter(networks[selectedIndex])) {
+            selectedIndex = startIdx;  // No match found, stay put
+        } else if (selectedIndex >= 0 && selectedIndex < (int)networks.size()) {
             viewCenterMHz = channelToFreq(networks[selectedIndex].channel);
         }
     }
     if (M5Cardputer.Keyboard.isKeyPressed('.') && !networks.empty()) {
-        selectedIndex = (selectedIndex + 1) % (int)networks.size();
-        if (selectedIndex >= 0 && selectedIndex < (int)networks.size()) {
+        int startIdx = selectedIndex;
+        int count = 0;
+        do {
+            selectedIndex = (selectedIndex + 1) % (int)networks.size();
+            count++;
+        } while (!matchesFilter(networks[selectedIndex]) && count < (int)networks.size());
+        
+        if (!matchesFilter(networks[selectedIndex])) {
+            selectedIndex = startIdx;  // No match found, stay put
+        } else if (selectedIndex >= 0 && selectedIndex < (int)networks.size()) {
             viewCenterMHz = channelToFreq(networks[selectedIndex].channel);
         }
     }
@@ -298,6 +430,12 @@ void SpectrumMode::handleInput() {
         if (selectedIndex >= 0 && selectedIndex < (int)networks.size()) {
             enterClientMonitor();
         }
+    }
+    
+    // Space: toggle dial lock when in dial mode
+    if (M5Cardputer.Keyboard.isKeyPressed(' ') && dialMode) {
+        dialLocked = !dialLocked;
+        SFX::play(SFX::CLICK);
     }
 }
 
@@ -321,9 +459,20 @@ void SpectrumMode::handleClientMonitorInput() {
         return;
     }
     
-    // Exit keys (backtick or backspace)
-    if (M5Cardputer.Keyboard.isKeyPressed('`') || 
-        M5Cardputer.Keyboard.isKeyPressed(KEY_BACKSPACE)) {
+    // If revealing, any key exits reveal mode
+    if (revealingClients) {
+        exitRevealMode();
+        return;
+    }
+    
+    // W key: enter reveal mode (broadcast deauth to discover clients)
+    if (M5Cardputer.Keyboard.isKeyPressed('w') || M5Cardputer.Keyboard.isKeyPressed('W')) {
+        enterRevealMode();
+        return;
+    }
+    
+    // Backspace - go back
+    if (M5Cardputer.Keyboard.isKeyPressed(KEY_BACKSPACE)) {
         exitClientMonitor();
         return;
     }
@@ -395,6 +544,10 @@ void SpectrumMode::draw(M5Canvas& canvas) {
         drawAxis(canvas);
         drawSpectrum(canvas);
         drawChannelMarkers(canvas);
+        drawFilterBar(canvas);
+        
+        // Draw dial mode info (when device upright)
+        drawDialInfo(canvas);
         
         // Draw status indicators if network is selected
         if (selectedIndex >= 0 && selectedIndex < (int)networks.size()) {
@@ -420,8 +573,7 @@ void SpectrumMode::draw(M5Canvas& canvas) {
         }
     }
     
-    // Draw XP bar at bottom (y=91+) - always visible [P12]
-    XP::drawBar(canvas);
+    // XP now shows in top bar on gain (Option B)
 }
 
 void SpectrumMode::drawAxis(M5Canvas& canvas) {
@@ -450,6 +602,29 @@ void SpectrumMode::drawChannelMarkers(M5Canvas& canvas) {
     canvas.setTextColor(COLOR_FG);
     canvas.setTextDatum(top_center);
     
+    // ==[ DIAL MODE: SLIDING HIGHLIGHT BOX ]==
+    // Draw BEFORE channel numbers so numbers appear inverted on top
+    if (dialMode) {
+        // Calculate X position from smooth dial position
+        // Map channel position (1-13) to X coordinate
+        float clampedPos = constrain(dialPositionSmooth, 1.0f, 13.0f);
+        float freq = 2412.0f + (clampedPos - 1.0f) * 5.0f;
+        int xCenter = freqToX(freq);
+        
+        int boxW = 14;
+        int boxH = 10;
+        int boxY = CHANNEL_LABEL_Y - 1;
+        int boxX = xCenter - boxW / 2;
+        
+        // Draw filled highlight box
+        canvas.fillRect(boxX, boxY, boxW, boxH, COLOR_FG);
+        
+        // Lock indicator: thicker border when locked
+        if (dialLocked) {
+            canvas.drawRect(boxX - 1, boxY - 1, boxW + 2, boxH + 2, COLOR_FG);
+        }
+    }
+    
     // Draw channel numbers for visible channels
     for (uint8_t ch = 1; ch <= 13; ch++) {
         float freq = channelToFreq(ch);
@@ -459,10 +634,20 @@ void SpectrumMode::drawChannelMarkers(M5Canvas& canvas) {
         if (x >= SPECTRUM_LEFT && x <= SPECTRUM_RIGHT) {
             // Tick mark
             canvas.drawFastVLine(x, SPECTRUM_BOTTOM, 3, COLOR_FG);
+            
+            // In dial mode: invert the channel number that's under the highlight box
+            bool isDialSelected = dialMode && (fabsf(dialPositionSmooth - (float)ch) < 0.6f);
+            if (isDialSelected) {
+                canvas.setTextColor(COLOR_BG);  // inverted for selected channel
+            } else {
+                canvas.setTextColor(COLOR_FG);
+            }
+            
             // Channel number
             canvas.drawString(String(ch), x, CHANNEL_LABEL_Y);
         }
     }
+    canvas.setTextColor(COLOR_FG);  // reset
     
     // Scroll indicators
     float leftEdge = viewCenterMHz - viewWidthMHz / 2;
@@ -476,6 +661,88 @@ void SpectrumMode::drawChannelMarkers(M5Canvas& canvas) {
     if (rightEdge < 2477) {  // More channels to the right
         canvas.drawString(">", SPECTRUM_RIGHT + 1, SPECTRUM_BOTTOM / 2);
     }
+}
+
+// Draw filter indicator bar at Y=91 (old XP bar area)
+void SpectrumMode::drawFilterBar(M5Canvas& canvas) {
+    // Count networks matching current filter
+    int matchCount = 0;
+    for (const auto& net : networks) {
+        if (matchesFilter(net)) matchCount++;
+    }
+    
+    canvas.setTextSize(1);
+    canvas.setTextColor(COLOR_FG);
+    canvas.setTextDatum(top_left);
+    
+    // Build filter status string
+    char buf[40];
+    const char* filterName;
+    const char* suffix;
+    
+    switch (filter) {
+        case SpectrumFilter::VULN:
+            filterName = "VULN";
+            suffix = matchCount == 1 ? "TARGET" : "TARGETS";
+            break;
+        case SpectrumFilter::SOFT:
+            filterName = "SOFT";
+            suffix = matchCount == 1 ? "TARGET" : "TARGETS";
+            break;
+        case SpectrumFilter::HIDDEN:
+            filterName = "HIDDEN";
+            suffix = "FOUND";
+            break;
+        case SpectrumFilter::ALL:
+        default:
+            filterName = "ALL";
+            suffix = matchCount == 1 ? "AP" : "APs";
+            break;
+    }
+    
+    snprintf(buf, sizeof(buf), "[F] %s: %d %s", filterName, matchCount, suffix);
+    canvas.drawString(buf, 2, XP_BAR_Y);
+    
+    // Stress test indicator (right side)
+    if (StressTest::isActive()) {
+        char stressBuf[24];
+        snprintf(stressBuf, sizeof(stressBuf), "[T] STRESS %lu/s", StressTest::getRate());
+        canvas.setTextDatum(top_right);
+        canvas.drawString(stressBuf, 238, XP_BAR_Y);
+        canvas.setTextDatum(top_left);
+    }
+}
+
+// Draw dial mode info bar (top-right when device upright)
+void SpectrumMode::drawDialInfo(M5Canvas& canvas) {
+    if (!dialMode) return;
+    
+    // Show channel info at top-right, above spectrum
+    int infoY = 4;  // top margin
+    
+    char info[32];
+    uint16_t freq = (uint16_t)channelToFreq(dialChannel);  // MHz as integer
+    
+    // Format pps
+    char ppsStr[8];
+    if (displayPps >= 1000) {
+        snprintf(ppsStr, sizeof(ppsStr), "%.1fk", displayPps / 1000.0f);
+    } else {
+        snprintf(ppsStr, sizeof(ppsStr), "%lu", displayPps);
+    }
+    
+    // Format: "CH7 2442MHz 42pps" or "LCK7 2442MHz 42pps"
+    if (dialLocked) {
+        snprintf(info, sizeof(info), "LCK%d %dMHz %spps", dialChannel, freq, ppsStr);
+    } else {
+        snprintf(info, sizeof(info), "CH%d %dMHz %spps", dialChannel, freq, ppsStr);
+    }
+    
+    canvas.setTextSize(1);
+    canvas.setTextColor(COLOR_FG);
+    canvas.setTextDatum(top_right);  // top-right align
+    canvas.drawString(info, 236, infoY);
+    canvas.setTextDatum(top_left);  // reset
 }
 
 // Draw client monitoring overlay [P3] [P12] [P14] [P15]
@@ -592,6 +859,28 @@ void SpectrumMode::drawClientOverlay(M5Canvas& canvas) {
     if (clientDetailActive) {
         drawClientDetail(canvas);
     }
+    
+    // Draw reveal mode overlay (persistent toast with live count)
+    if (revealingClients) {
+        int boxW = 160;
+        int boxH = 40;
+        int boxX = (240 - boxW) / 2;
+        int boxY = (90 - boxH) / 2;
+        
+        // Black border then inverted fill
+        canvas.fillRoundRect(boxX - 2, boxY - 2, boxW + 4, boxH + 4, 8, COLOR_BG);
+        canvas.fillRoundRect(boxX, boxY, boxW, boxH, 8, COLOR_FG);
+        
+        // Black text on inverted background
+        canvas.setTextColor(COLOR_BG, COLOR_FG);
+        canvas.setTextDatum(middle_center);
+        canvas.drawString("WAKIE WAKIE", 120, boxY + 12);
+        
+        // Show live client count
+        char countStr[24];
+        snprintf(countStr, sizeof(countStr), "FOUND: %d", net.clientCount);
+        canvas.drawString(countStr, 120, boxY + 28);
+    }
 }
 
 // Draw client detail popup - modal overlay with full client info
@@ -686,9 +975,13 @@ void SpectrumMode::drawSpectrum(M5Canvas& canvas) {
         return a.rssi < b.rssi;
     });
     
-    // Draw each network's Gaussian lobe
+    // Draw each network's Gaussian lobe (only if matches filter)
     for (size_t i = 0; i < sorted.size(); i++) {
         const auto& net = sorted[i];
+        
+        // Skip networks that don't match current filter
+        if (!matchesFilter(net)) continue;
+        
         float freq = channelToFreq(net.channel);
         
         // Check if selected (compare by BSSID)
@@ -770,6 +1063,142 @@ float SpectrumMode::channelToFreq(uint8_t channel) {
     if (channel < 1) channel = 1;
     if (channel > 13) channel = 13;
     return 2412.0f + (channel - 1) * 5.0f;
+}
+
+// ============================================================
+// DIAL MODE: TILT-TO-TUNE CHANNEL SELECTION
+// When device goes UPRIGHT (UPS), dial mode activates automatically
+// Accelerometer tilt left/right selects channel with smooth sliding indicator
+// ============================================================
+
+void SpectrumMode::updateDialChannel() {
+    // Skip if not Cardputer ADV (no accelerometer on regular Cardputer)
+    if (M5.getBoard() != m5::board_t::board_M5CardputerADV) return;
+    
+    // Skip if in client monitor mode
+    if (monitoringNetwork) return;
+    
+    uint32_t now = millis();
+    
+    // ==[ PPS UPDATE ]== once per second
+    if (now - lastPpsUpdate >= 1000) {
+        displayPps = ppsCounter;
+        ppsCounter = 0;
+        lastPpsUpdate = now;
+    }
+    
+    // ==[ READ IMU ]== accelerometer
+    float ax, ay, az;
+    M5.Imu.getAccel(&ax, &ay, &az);
+    
+    // ==[ AUTO FLT/UPS MODE SWITCH WITH HYSTERESIS ]==
+    // FLT (flat): normal spectrum mode, auto-hopping
+    // UPS (upright): dial mode activates, accelerometer controls channel
+    // Hysteresis prevents flickering at boundary:
+    //   Enter UPS when |az| < 0.5 (clearly upright)
+    //   Exit UPS when |az| > 0.7 (clearly flat)
+    //   Between 0.5-0.7: maintain previous state
+    float absAz = fabsf(az);
+    
+    bool deviceFlat;
+    if (dialWasUpright) {
+        // Currently upright - need strong flat signal to exit
+        deviceFlat = absAz > 0.7f;
+    } else {
+        // Currently flat - need strong upright signal to enter
+        deviceFlat = absAz > 0.5f;
+    }
+    dialWasUpright = !deviceFlat;
+    
+    if (deviceFlat) {
+        // Device flat - disable dial mode, return to normal hopping
+        // But only after 200ms debounce to prevent flicker
+        if (dialMode && (now - dialModeEntryTime >= 200)) {
+            dialMode = false;
+            // Don't change channel - let normal hopping resume
+        }
+        return;  // No dial update when flat
+    } else {
+        // Device upright - enable dial mode
+        if (!dialMode) {
+            dialMode = true;
+            dialModeEntryTime = now;
+            lastDialUpdate = now;  // Reset timing to avoid dt jump
+            // Initialize smooth position to current channel
+            dialPositionSmooth = (float)currentChannel;
+            dialPositionTarget = dialPositionSmooth;
+            dialChannel = currentChannel;
+        }
+    }
+    
+    // ==[ DIAL LOCKED ]== skip gyro reading but keep channel
+    if (dialLocked) {
+        // Keep channel locked
+        if (currentChannel != dialChannel) {
+            esp_wifi_set_channel(dialChannel, WIFI_SECOND_CHAN_NONE);
+            currentChannel = dialChannel;
+        }
+        return;
+    }
+    
+    // ==[ LANDSCAPE UPRIGHT JOG CONTROL ]==
+    // JOG WHEEL behavior - tilt to scroll channels, level to stop.
+    // Ported from Sirloin for satisfying feel.
+    
+    const float DEADZONE = 0.05f;      // tiny deadzone - just noise rejection
+    const float SCROLL_SPEED = 25.0f;  // FAST: full sweep in ~0.5s at max tilt
+    
+    // Use -ax for left/right tilt in landscape upright orientation
+    // Tilt right (right edge down) → ax positive → -ax negative → BUT we want higher channels
+    // So invert: tilt right = positive scroll = higher channels
+    float tilt = -ax;
+    
+    // Apply deadzone
+    if (fabsf(tilt) < DEADZONE) {
+        tilt = 0.0f;
+    } else {
+        // Remove deadzone from value, preserve sign
+        tilt = (tilt > 0) ? (tilt - DEADZONE) : (tilt + DEADZONE);
+    }
+    
+    // Clamp to ±1 range (values beyond ±1g are extreme)
+    tilt = constrain(tilt, -1.0f, 1.0f);
+    
+    // Calculate time delta
+    float dt = (now - lastDialUpdate) / 1000.0f;
+    if (dt > 0.1f) dt = 0.1f;  // cap to avoid jumps after pause
+    if (dt < 0.001f) dt = 0.016f;  // minimum ~60fps equivalent
+    
+    // Apply scroll: tilt controls velocity (jog wheel style)
+    // Positive tilt → higher channels, Negative tilt → lower channels
+    dialPositionTarget += tilt * SCROLL_SPEED * dt;
+    dialPositionTarget = constrain(dialPositionTarget, 1.0f, 13.0f);
+    
+    // ==[ SMOOTH INTERPOLATION ]== faster lerp for responsiveness
+    dialPositionSmooth += (dialPositionTarget - dialPositionSmooth) * 0.3f;
+    
+    // ==[ CHANNEL FROM SMOOTH POSITION ]== rounded integer
+    int newChannel = (int)roundf(dialPositionSmooth);
+    newChannel = constrain(newChannel, 1, 13);  // WiFi channels 1-13 only
+    
+    // ==[ UPDATE CHANNEL IF CHANGED ]==
+    if (newChannel != dialChannel) {
+        dialChannel = newChannel;
+        esp_wifi_set_channel(dialChannel, WIFI_SECOND_CHAN_NONE);
+        currentChannel = dialChannel;
+        SFX::play(SFX::CLICK);  // tick sound on channel change
+        
+        // Scroll spectrum view to keep dial channel centered
+        viewCenterMHz = channelToFreq(dialChannel);
+    }
+    
+    // Ensure we stay on dial channel
+    if (currentChannel != dialChannel) {
+        esp_wifi_set_channel(dialChannel, WIFI_SECOND_CHAN_NONE);
+        currentChannel = dialChannel;
+    }
+    
+    lastDialUpdate = now;
 }
 
 void SpectrumMode::pruneStale() {
@@ -872,71 +1301,90 @@ void SpectrumMode::onBeacon(const uint8_t* bssid, uint8_t channel, int8_t rssi, 
         return;  // At capacity, skip
     }
     
-    networks.push_back(net);
-    
-    // Defer XP to main loop (onBeacon runs in WiFi callback - can't call Display::showLevelUp)
-    // If pendingNetworkXP overflows (255), we just miss some +1 XP - acceptable
-    if (pendingNetworkXP < 255) pendingNetworkXP++;
-    
-    // Auto-select first network
-    if (selectedIndex < 0) {
-        selectedIndex = 0;
+    // Defer push_back to main loop (ESP32 dual-core race: callback can run concurrent with update())
+    // If pendingNetworkAdd already set, we lose one add - acceptable tradeoff for safety
+    if (!pendingNetworkAdd) {
+        pendingNetwork = net;
+        pendingNetworkAdd = true;
+        // Defer XP to main loop (onBeacon runs in WiFi callback - can't call Display::showLevelUp)
+        if (pendingNetworkXP < 255) pendingNetworkXP++;
     }
 }
 
-String SpectrumMode::getSelectedInfo() {
+void SpectrumMode::getSelectedInfo(char* out, size_t len) {
+    if (!out || len == 0) return;
     // Guard against callback race
-    if (busy) return "SCANNING...";
+    if (busy) {
+        snprintf(out, len, "SCANNING...");
+        return;
+    }
     
     // [P8] Client monitoring mode - show client count and channel (SSID in header)
     if (monitoringNetwork) {
         if (monitoredNetworkIndex >= 0 && monitoredNetworkIndex < (int)networks.size()) {
             const auto& net = networks[monitoredNetworkIndex];
-            char buf[32];
             // SSID already shown in header - no duplication needed
-            snprintf(buf, sizeof(buf), "MON C:%02d CH:%02d", 
-                     net.clientCount, net.channel);
-            return String(buf);
+            snprintf(out, len, "MON C:%02d CH:%02d", net.clientCount, net.channel);
+            return;
         }
-        return "MONITORING...";
+        snprintf(out, len, "MONITORING...");
+        return;
     }
     
     if (selectedIndex >= 0 && selectedIndex < (int)networks.size()) {
         const auto& net = networks[selectedIndex];
         
         // Bottom bar: ~33 chars available (240px - margins - uptime)
-        // Fixed part: " -XXdB chXX YYYY" = ~16 chars worst case
+        // Fixed part: " -XXdB CH:XX YYYY" = ~16 chars worst case
         // SSID gets max 15 chars + ".." if truncated
-        const int MAX_SSID_DISPLAY = 15;
+        const size_t MAX_SSID_DISPLAY = 15;
         
-        String ssid;
+        char ssidBuf[32];
         if (net.ssid[0]) {
-            ssid = net.wasRevealed ? String("*") + net.ssid : net.ssid;
+            if (net.wasRevealed) {
+                snprintf(ssidBuf, sizeof(ssidBuf), "*%s", net.ssid);
+            } else {
+                strncpy(ssidBuf, net.ssid, sizeof(ssidBuf) - 1);
+                ssidBuf[sizeof(ssidBuf) - 1] = '\0';
+            }
         } else {
-            ssid = "[HIDDEN]";
+            strncpy(ssidBuf, "[HIDDEN]", sizeof(ssidBuf) - 1);
+            ssidBuf[sizeof(ssidBuf) - 1] = '\0';
         }
-        ssid.toUpperCase();
-        if (ssid.length() > MAX_SSID_DISPLAY) {
-            ssid = ssid.substring(0, MAX_SSID_DISPLAY) + "..";
+        for (size_t i = 0; ssidBuf[i]; i++) {
+            ssidBuf[i] = (char)toupper((unsigned char)ssidBuf[i]);
+        }
+        size_t ssidLen = strlen(ssidBuf);
+        if (ssidLen > MAX_SSID_DISPLAY) {
+            if (MAX_SSID_DISPLAY >= 2) {
+                ssidBuf[MAX_SSID_DISPLAY] = '\0';
+                ssidBuf[MAX_SSID_DISPLAY - 2] = '.';
+                ssidBuf[MAX_SSID_DISPLAY - 1] = '.';
+            } else if (MAX_SSID_DISPLAY > 0) {
+                ssidBuf[MAX_SSID_DISPLAY] = '\0';
+            }
         }
         
-        char buf[64];
-        snprintf(buf, sizeof(buf), "%s %ddB CH:%02d %s", 
-                 ssid.c_str(), 
+        snprintf(out, len, "%s %ddB CH:%02d %s",
+                 ssidBuf,
                  net.rssi, net.channel,
                  authModeToShortString(net.authmode));
-        return String(buf);
+        return;
     }
     if (networks.empty()) {
-        return "SCANNING...";
+        snprintf(out, len, "SCANNING...");
+        return;
     }
-    return "PRESS ENTER TO SELECT";
+    snprintf(out, len, "PRESS ENTER TO SELECT");
 }
 
 // Promiscuous callback - extract beacon info
 void SpectrumMode::promiscuousCallback(void* buf, wifi_promiscuous_pkt_type_t type) {
     if (!running) return;
     if (busy) return;  // [P1] Main thread is iterating
+    
+    // Count all packets for PPS display in dial mode
+    ppsCounter++;
     
     const wifi_promiscuous_pkt_t* pkt = (wifi_promiscuous_pkt_t*)buf;
     const uint8_t* payload = pkt->payload;
@@ -1032,6 +1480,21 @@ bool SpectrumMode::isVulnerable(wifi_auth_mode_t mode) {
             return true;
         default:
             return false;
+    }
+}
+
+// Check if network passes current filter
+bool SpectrumMode::matchesFilter(const SpectrumNetwork& net) {
+    switch (filter) {
+        case SpectrumFilter::VULN:
+            return isVulnerable(net.authmode);
+        case SpectrumFilter::SOFT:
+            return !net.hasPMF;
+        case SpectrumFilter::HIDDEN:
+            return net.isHidden;
+        case SpectrumFilter::ALL:
+        default:
+            return true;
     }
 }
 
@@ -1218,10 +1681,8 @@ void SpectrumMode::enterClientMonitor() {
     // Lock channel
     esp_wifi_set_channel(monitoredChannel, WIFI_SECOND_CHAN_NONE);
     
-    // Short beep for channel lock
-    if (Config::personality().soundEnabled) {
-        M5.Speaker.tone(700, 80);
-    }
+    // Short beep for channel lock - non-blocking
+    SFX::play(SFX::CHANNEL_LOCK);
     
     Serial.printf("[SPECTRUM] Monitoring %s on CH%d\n", 
         net.ssid[0] ? net.ssid : "<hidden>", monitoredChannel);
@@ -1358,10 +1819,8 @@ void SpectrumMode::deauthClient(int idx) {
         delay(random(1, 6));
     }
     
-    // Feedback beep (low thump)
-    if (Config::personality().soundEnabled) {
-        M5.Speaker.tone(600, 80);
-    }
+    // Feedback beep (low thump) - non-blocking
+    SFX::play(SFX::DEAUTH);
     
     // Short toast with client MAC suffix
     char msg[24];
@@ -1403,4 +1862,73 @@ void SpectrumMode::deauthClient(int idx) {
     }
     
     busy = false;
+}
+
+// Enter reveal mode - broadcast deauth to discover clients
+void SpectrumMode::enterRevealMode() {
+    if (revealingClients) return;
+    
+    // Check PMF - warn if network is protected
+    if (monitoredNetworkIndex >= 0 && monitoredNetworkIndex < (int)networks.size()) {
+        if (networks[monitoredNetworkIndex].hasPMF) {
+            Display::showToast("PMF PROTECTED");
+            return;
+        }
+    }
+    
+    revealingClients = true;
+    revealStartTime = millis();
+    lastRevealBurst = 0;
+    
+    // Sound feedback - non-blocking
+    SFX::play(SFX::REVEAL_START);
+}
+
+// Exit reveal mode
+void SpectrumMode::exitRevealMode() {
+    if (!revealingClients) return;
+    
+    revealingClients = false;
+    
+    // Report how many clients found
+    int clientCount = 0;
+    if (monitoredNetworkIndex >= 0 && monitoredNetworkIndex < (int)networks.size()) {
+        clientCount = networks[monitoredNetworkIndex].clientCount;
+    }
+    
+    char msg[24];
+    snprintf(msg, sizeof(msg), "FOUND %d CLIENTS", clientCount);
+    Display::showToast(msg);
+}
+
+// Update reveal mode - send periodic broadcast deauths
+void SpectrumMode::updateRevealMode() {
+    if (!revealingClients) return;
+    
+    uint32_t now = millis();
+    
+    // Auto-exit after 10 seconds
+    if (now - revealStartTime > 10000) {
+        exitRevealMode();
+        return;
+    }
+    
+    // Send broadcast deauth every 500ms
+    if (now - lastRevealBurst >= 500) {
+        lastRevealBurst = now;
+        
+        if (monitoredNetworkIndex >= 0 && monitoredNetworkIndex < (int)networks.size()) {
+            const auto& net = networks[monitoredNetworkIndex];
+            const uint8_t broadcast[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+            
+            // Send 3 broadcast deauths
+            for (int i = 0; i < 3; i++) {
+                WSLBypasser::sendDeauthFrame(net.bssid, net.channel, broadcast, 7);
+                delay(5);
+            }
+            
+            // Pulse beep during reveal - disabled to avoid audio spam
+            // SFX handles reveal start sound
+        }
+    }
 }

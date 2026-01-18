@@ -3,6 +3,10 @@
 // must be generated from studio.edgeimpulse.com for your model.
 
 #include "inference.h"
+
+#if !PORKCHOP_ENABLE_ML
+// ML disabled: skip inference implementation
+#else
 #include "edge_impulse.h"
 #include "../core/config.h"
 #include "../ui/display.h"
@@ -377,3 +381,5 @@ bool MLInference::downloadAndUpdate(const char* url, bool promptUser) {
     
     return true;
 }
+
+#endif  // PORKCHOP_ENABLE_ML

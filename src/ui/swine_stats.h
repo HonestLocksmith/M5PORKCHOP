@@ -23,7 +23,7 @@ enum class PorkDebuff : uint8_t {
 };
 
 // Class buff flags (permanent, cumulative based on level)
-enum class ClassBuff : uint8_t {
+enum class ClassBuff : uint16_t {
     NONE         = 0,
     P4CK3T_NOSE  = (1 << 0),  // SN1FF3R L6+   -10% hop interval
     H4RD_SNOUT   = (1 << 1),  // PWNER L11+    +1 deauth burst
@@ -32,6 +32,8 @@ enum class ClassBuff : uint8_t {
     CR4CK_NOSE   = (1 << 4),  // EXPL01T L26+  +10% capture XP
     IR0N_TUSKS   = (1 << 5),  // WARL0RD L31+  -1ms jitter min
     OMNI_P0RK    = (1 << 6),  // L3G3ND L36+   +5% all stats
+    K3RN3L_H0G   = (1 << 7),  // L41+         +10% cap/dist, +5% XP
+    B4C0NM4NC3R  = (1 << 8)   // L46+         +15% cap/dist, +10% XP
 };
 
 // Active buff/debuff state
@@ -60,7 +62,7 @@ public:
     
     // Buff/debuff calculation (called by modes)
     static BuffState calculateBuffs();
-    static uint8_t calculateClassBuffs();  // Returns ClassBuff flags
+    static uint16_t calculateClassBuffs();  // Returns ClassBuff flags
     
     // Buff effect getters for game mechanics
     static uint8_t getDeauthBurstCount();     // Base 5, modified by buffs
@@ -86,7 +88,7 @@ private:
     static bool active;
     static bool keyWasPressed;
     static BuffState currentBuffs;
-    static uint8_t currentClassBuffs;
+    static uint16_t currentClassBuffs;
     static uint32_t lastBuffUpdate;
     static StatsTab currentTab;
     

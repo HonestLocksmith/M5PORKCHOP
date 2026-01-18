@@ -7,7 +7,9 @@
 #include "../ui/settings_menu.h"
 #include "../ui/captures_menu.h"
 #include "../ui/achievements_menu.h"
-#include "../ui/log_viewer.h"
+#include "../ui/bounty_status_menu.h"
+#include "../ui/crash_viewer.h"
+#include "../ui/diagnostics_menu.h"
 #include "../ui/swine_stats.h"
 #include "../ui/boar_bros_menu.h"
 #include "../ui/wigle_menu.h"
@@ -19,12 +21,15 @@
 #include "../modes/warhog.h"
 #include "../modes/piggyblues.h"
 #include "../modes/spectrum.h"
-#include "../modes/call_papa.h"
+#include "../modes/pigsync_client.h"
+#include "../modes/marco.h"
 #include "../web/fileserver.h"
+#include "../audio/sfx.h"
 #include "config.h"
 #include "xp.h"
 #include "sdlog.h"
 #include "challenges.h"
+#include "stress_test.h"
 
 Porkchop::Porkchop() 
     : currentMode(PorkchopMode::IDLE)
@@ -47,6 +52,7 @@ void Porkchop::init() {
     // Register level up callback to show popup
     XP::setLevelUpCallback([](uint8_t oldLevel, uint8_t newLevel) {
         Display::showLevelUp(oldLevel, newLevel);
+        Avatar::cuteJump();  // Celebratory jump on level up!
         
         // Check if class tier changed (every 5 levels: 6, 11, 16, 21, 26, 31, 36)
         PorkClass oldClass = XP::getClassForLevel(oldLevel);
@@ -74,33 +80,7 @@ void Porkchop::init() {
         deauthCount++;
     });
     
-    // Setup main menu with callback
-    // Order: Modes -> Data/Stats -> Services
-    std::vector<MenuItem> mainMenuItems = {
-        // === MODES ===
-        {"OINK", 1, "DEAUTH N CAPTURE INNIT"},
-        {"DONOHAM", 14, "JAH BLESS DI RX"},
-        {"WARHOG", 2, "OSCAR MIKE WITH GPS"},
-        {"PIGGY BLUES", 8, "SLAY ON BLEAY"},
-        {"CALL PIG JUNIOR", 16, "SYNC FROM SIRLOIN"},
-        {"HOG ON SPECTRUM", 10, "NIETZSCHE KNOWS"},
-        // === DATA & STATS ===
-        {"SWINE STATS", 11, "PIGRESSION"},
-        {"LOOT", 4, "HASHCAT FOOD"},
-        {"PORK TRACKS", 13, "RECON OP DEBRIEF"},
-        {"BOAR BROS", 12, "RESPECT THE FAMILY"},
-        {"ACHIEVEMENTS", 9, "YOU DO IT ON STEAM"},
-        {"UNLOCKABLES", 15, "OPEN ME"},
-        // === SERVICES ===
-        {"FILE TRANSFER", 3, "CABLES HELL NAH"},
-        {"LOG VIEWER", 7, "KEEP IT CLEAN KIDDO"},
-        {"SETTINGS", 5, "now in lowercase"},
-        {"ABOUT", 6, "SHOW YOUR THERAPIST"}
-    };
-    Menu::setItems(mainMenuItems);
-    Menu::setTitle("PORKCHOP OS");
-    
-    // Menu selection handler
+    // Menu selection handler - items now defined in menu.cpp as static arrays
     Menu::setCallback([this](uint8_t actionId) {
         switch (actionId) {
             case 1: setMode(PorkchopMode::OINK_MODE); break;
@@ -109,7 +89,7 @@ void Porkchop::init() {
             case 4: setMode(PorkchopMode::CAPTURES); break;
             case 5: setMode(PorkchopMode::SETTINGS); break;
             case 6: setMode(PorkchopMode::ABOUT); break;
-            case 7: setMode(PorkchopMode::LOG_VIEWER); break;
+            case 7: setMode(PorkchopMode::CRASH_VIEWER); break;
             case 8: setMode(PorkchopMode::PIGGYBLUES_MODE); break;
             case 9: setMode(PorkchopMode::ACHIEVEMENTS); break;
             case 10: setMode(PorkchopMode::SPECTRUM_MODE); break;
@@ -118,12 +98,17 @@ void Porkchop::init() {
             case 13: setMode(PorkchopMode::WIGLE_MENU); break;
             case 14: setMode(PorkchopMode::DNH_MODE); break;
             case 15: setMode(PorkchopMode::UNLOCKABLES); break;
-            case 16: setMode(PorkchopMode::CALL_PAPA_MODE); break;
+            case 16: setMode(PorkchopMode::PIGSYNC_DEVICE_SELECT); break;
+            case 17: setMode(PorkchopMode::BOUNTY_STATUS); break;
+            case 18: setMode(PorkchopMode::MARCO_MODE); break;
+            case 19: setMode(PorkchopMode::DIAGNOSTICS); break;
         }
-        Menu::clearSelected();
     });
     
     Avatar::setState(AvatarState::HAPPY);
+    
+    // Initialize non-blocking audio system
+    SFX::init();
     
     Serial.println("[PORKCHOP] Initialized");
     SDLog::log("PORK", "Initialized - LV%d %s", XP::getLevel(), XP::getTitle());
@@ -133,6 +118,15 @@ void Porkchop::update() {
     processEvents();
     handleInput();
     updateMode();
+    
+    // Tick non-blocking audio engine
+    SFX::update();
+    
+    // Process one queued achievement celebration (debounced)
+    XP::processAchievementQueue();
+    
+    // Stress test injection (if active)
+    StressTest::update();
     
     // Check for session time XP bonuses
     XP::updateSessionTime();
@@ -149,17 +143,20 @@ void Porkchop::setMode(PorkchopMode mode) {
         (oldMode == PorkchopMode::OINK_MODE && mode == PorkchopMode::DNH_MODE) ||
         (oldMode == PorkchopMode::DNH_MODE && mode == PorkchopMode::OINK_MODE);
     
-    // Only save "real" modes as previous (not SETTINGS/ABOUT/MENU/CAPTURES/ACHIEVEMENTS/FILE_TRANSFER/LOG_VIEWER/SWINE_STATS/BOAR_BROS/WIGLE_MENU/UNLOCKABLES)
-    if (currentMode != PorkchopMode::SETTINGS && 
-        currentMode != PorkchopMode::ABOUT && 
+    // Only save "real" modes as previous (not modal menus)
+    if (currentMode != PorkchopMode::SETTINGS &&
+        currentMode != PorkchopMode::ABOUT &&
         currentMode != PorkchopMode::CAPTURES &&
         currentMode != PorkchopMode::ACHIEVEMENTS &&
         currentMode != PorkchopMode::MENU &&
         currentMode != PorkchopMode::FILE_TRANSFER &&
-        currentMode != PorkchopMode::LOG_VIEWER &&
+        currentMode != PorkchopMode::CRASH_VIEWER &&
+        currentMode != PorkchopMode::DIAGNOSTICS &&
         currentMode != PorkchopMode::SWINE_STATS &&
         currentMode != PorkchopMode::BOAR_BROS &&
         currentMode != PorkchopMode::WIGLE_MENU &&
+        currentMode != PorkchopMode::BOUNTY_STATUS &&
+        currentMode != PorkchopMode::PIGSYNC_DEVICE_SELECT &&
         currentMode != PorkchopMode::UNLOCKABLES) {
         previousMode = currentMode;
     }
@@ -205,8 +202,11 @@ void Porkchop::setMode(PorkchopMode mode) {
         case PorkchopMode::FILE_TRANSFER:
             FileServer::stop();
             break;
-        case PorkchopMode::LOG_VIEWER:
-            LogViewer::hide();
+        case PorkchopMode::CRASH_VIEWER:
+            CrashViewer::hide();
+            break;
+        case PorkchopMode::DIAGNOSTICS:
+            DiagnosticsMenu::hide();
             break;
         case PorkchopMode::SWINE_STATS:
             SwineStats::hide();
@@ -220,8 +220,15 @@ void Porkchop::setMode(PorkchopMode mode) {
         case PorkchopMode::UNLOCKABLES:
             UnlockablesMenu::hide();
             break;
-        case PorkchopMode::CALL_PAPA_MODE:
-            CallPapaMode::stop();
+        case PorkchopMode::BOUNTY_STATUS:
+            BountyStatusMenu::hide();
+            break;
+        case PorkchopMode::PIGSYNC_DEVICE_SELECT:
+            PigSyncMode::stopDiscovery();
+            PigSyncMode::stop();
+            break;
+        case PorkchopMode::MARCO_MODE:
+            MarcoMode::stop();
             break;
         default:
             break;
@@ -257,6 +264,13 @@ void Porkchop::setMode(PorkchopMode mode) {
             Avatar::setState(AvatarState::EXCITED);
             Display::showToast("SNIFFING THE AIR...");
             SDLog::log("PORK", "Mode: WARHOG");
+            // Disable ML/Enhanced features for heap savings
+            {
+                auto mlCfg = Config::ml();
+                mlCfg.enabled = false;
+                mlCfg.collectionMode = MLCollectionMode::BASIC;
+                Config::setML(mlCfg);
+            }
             WarhogMode::start();
             break;
         case PorkchopMode::PIGGYBLUES_MODE:
@@ -290,8 +304,11 @@ void Porkchop::setMode(PorkchopMode mode) {
             Avatar::setState(AvatarState::HAPPY);
             FileServer::start(Config::wifi().otaSSID.c_str(), Config::wifi().otaPassword.c_str());
             break;
-        case PorkchopMode::LOG_VIEWER:
-            LogViewer::show();
+        case PorkchopMode::CRASH_VIEWER:
+            CrashViewer::show();
+            break;
+        case PorkchopMode::DIAGNOSTICS:
+            DiagnosticsMenu::show();
             break;
         case PorkchopMode::SWINE_STATS:
             SwineStats::show();
@@ -305,10 +322,20 @@ void Porkchop::setMode(PorkchopMode mode) {
         case PorkchopMode::UNLOCKABLES:
             UnlockablesMenu::show();
             break;
-        case PorkchopMode::CALL_PAPA_MODE:
+        case PorkchopMode::BOUNTY_STATUS:
+            BountyStatusMenu::show();
+            break;
+        case PorkchopMode::PIGSYNC_DEVICE_SELECT:
             Avatar::setState(AvatarState::EXCITED);
-            SDLog::log("PORK", "Mode: CALL PAPA");
-            CallPapaMode::start();
+            SDLog::log("PORK", "Mode: PIGSYNC Device Select");
+            PigSyncMode::start();
+            PigSyncMode::startDiscovery();
+            break;
+        case PorkchopMode::MARCO_MODE:
+            Avatar::setState(AvatarState::HAPPY);
+            SDLog::log("PORK", "Mode: MARCO");
+            MarcoMode::init();
+            MarcoMode::start();
             break;
         case PorkchopMode::ABOUT:
             Display::resetAboutState();
@@ -340,20 +367,37 @@ void Porkchop::processEvents() {
 }
 
 void Porkchop::handleInput() {
-    // G0 button (GPIO0 on top side) - always returns to IDLE from any mode
-    // Try multiple detection methods for compatibility
+    // G0 button (GPIO0 on top side) - configurable action
     static bool g0WasPressed = false;
     bool g0Pressed = (digitalRead(0) == LOW);  // G0 is active LOW
-    
+
     if (g0Pressed && !g0WasPressed) {
-        Display::resetDimTimer();  // Wake screen on G0
-        Serial.printf("[PORKCHOP] G0 pressed! Current mode: %d\n", (int)currentMode);
-        if (currentMode != PorkchopMode::IDLE) {
-            Serial.println("[PORKCHOP] Returning to IDLE");
-            setMode(PorkchopMode::IDLE);
-            g0WasPressed = true;
-            return;
+        G0Action g0Action = Config::personality().g0Action;
+        if (g0Action != G0Action::SCREEN_TOGGLE) {
+            Display::resetDimTimer();  // Wake screen on G0
         }
+        Serial.printf("[PORKCHOP] G0 pressed! Current mode: %d\n", (int)currentMode);
+        switch (g0Action) {
+            case G0Action::SCREEN_TOGGLE:
+                Display::toggleScreenPower();
+                break;
+            case G0Action::OINK:
+                setMode(PorkchopMode::OINK_MODE);
+                break;
+            case G0Action::DNHAM:
+                setMode(PorkchopMode::DNH_MODE);
+                break;
+            case G0Action::SPECTRUM:
+                setMode(PorkchopMode::SPECTRUM_MODE);
+                break;
+            case G0Action::PIGSYNC:
+                setMode(PorkchopMode::PIGSYNC_DEVICE_SELECT);
+                break;
+            default:
+                break;
+        }
+        g0WasPressed = true;
+        return;
     }
     if (!g0Pressed) {
         g0WasPressed = false;
@@ -365,13 +409,17 @@ void Porkchop::handleInput() {
     Display::resetDimTimer();
     
     auto keys = M5Cardputer.Keyboard.keysState();
+    // ESC maps to the key above Tab (shares ` / ~)
+    bool escPressed = M5Cardputer.Keyboard.isKeyPressed('`');
+
+    // ESC to return to IDLE from any active mode
+    if (escPressed && currentMode != PorkchopMode::IDLE) {
+        setMode(PorkchopMode::IDLE);
+        return;
+    }
     
-    // In MENU mode, only handle backtick to exit
-    // Let Menu::handleInput() process navigation keys
+    // In MENU mode, let Menu::handleInput() process navigation keys
     if (currentMode == PorkchopMode::MENU) {
-        if (M5Cardputer.Keyboard.isKeyPressed('`')) {
-            setMode(previousMode);
-        }
         // Do NOT return here - let Menu::update() handle navigation
         // But we already consumed isChange(), so Menu won't see it
         // Instead, call Menu::update() directly here
@@ -389,28 +437,55 @@ void Porkchop::handleInput() {
         }
         return;
     }
+
+    // In PIGSYNC_DEVICE_SELECT mode, handle navigation and channel switching
+    if (currentMode == PorkchopMode::PIGSYNC_DEVICE_SELECT) {
+        uint8_t deviceCount = PigSyncMode::getDeviceCount();
+
+        // Handle device navigation (up/down) - only if devices exist
+        if (deviceCount > 0) {
+            if (M5Cardputer.Keyboard.isKeyPressed(';')) {
+                // Up arrow - select previous device
+                PigSyncMode::selectDevice(PigSyncMode::getSelectedIndex() > 0 ?
+                    PigSyncMode::getSelectedIndex() - 1 : deviceCount - 1);
+            }
+            if (M5Cardputer.Keyboard.isKeyPressed('.')) {
+                // Down arrow - select next device
+                PigSyncMode::selectDevice((PigSyncMode::getSelectedIndex() + 1) % deviceCount);
+            }
+        }
+
+        // Enter to connect to selected device
+        if (M5Cardputer.Keyboard.isKeyPressed(KEY_ENTER) && PigSyncMode::getDeviceCount() > 0) {
+            uint8_t selectedIdx = PigSyncMode::getSelectedIndex();
+            if (selectedIdx < PigSyncMode::getDeviceCount()) {
+                PigSyncMode::connectTo(selectedIdx);
+            }
+        }
+
+        // A to abort sync (when connected)
+        if (PigSyncMode::isConnected() && M5Cardputer.Keyboard.isKeyPressed('a')) {
+            if (PigSyncMode::isSyncing()) {
+                PigSyncMode::abortSync();
+            }
+        }
+
+        // D to disconnect (when connected)
+        if (PigSyncMode::isConnected() && M5Cardputer.Keyboard.isKeyPressed('d')) {
+            PigSyncMode::disconnect();
+        }
+
+        // R to rescan (when not connected)
+        if (!PigSyncMode::isConnected() && M5Cardputer.Keyboard.isKeyPressed('r')) {
+            PigSyncMode::startScan();
+        }
+
+        return; // Consume input for PIGSYNC_DEVICE_SELECT
+    }
     
-    // Menu toggle with backtick - context-sensitive "back one level"
-    if (M5Cardputer.Keyboard.isKeyPressed('`')) {
-        // SPECTRUM mode monitoring: let spectrum.cpp handle the key
-        if (currentMode == PorkchopMode::SPECTRUM_MODE && SpectrumMode::isMonitoring()) {
-            return;  // Don't intercept - spectrum.cpp will exit client monitor
-        }
-        // In active modes: go to IDLE
-        if (currentMode == PorkchopMode::OINK_MODE ||
-            currentMode == PorkchopMode::DNH_MODE ||
-            currentMode == PorkchopMode::WARHOG_MODE ||
-            currentMode == PorkchopMode::PIGGYBLUES_MODE ||
-            currentMode == PorkchopMode::SPECTRUM_MODE) {
-            setMode(PorkchopMode::IDLE);
-            return;
-        }
-        // In IDLE: open menu
-        if (currentMode == PorkchopMode::IDLE) {
-            setMode(PorkchopMode::MENU);
-            return;
-        }
-        // Other modes (FILE_TRANSFER, etc): go to menu
+    // Backtick opens menu from IDLE (kept out of back/exit flow)
+    if (currentMode == PorkchopMode::IDLE &&
+        M5Cardputer.Keyboard.isKeyPressed('`')) {
         setMode(PorkchopMode::MENU);
         return;
     }
@@ -422,6 +497,8 @@ void Porkchop::handleInput() {
         }
         return;
     }
+    
+    // T key stress test cycle disabled
     
     // Enter key in About mode - easter egg
     if (M5Cardputer.Keyboard.isKeyPressed(KEY_ENTER)) {
@@ -467,19 +544,18 @@ void Porkchop::handleInput() {
                 case 'F':
                     setMode(PorkchopMode::FILE_TRANSFER);
                     break;
-                case '1': // Reveal session challenges to Serial
-                    Challenges::printToSerial();
+                case '1': // PIG DEMANDS overlay
+                    Display::showChallenges();
+                    break;
+                case '2': // PIGSYNC device select
+                    setMode(PorkchopMode::PIGSYNC_DEVICE_SELECT);
                     break;
             }
         }
     }
     
-    // OINK mode - Backspace to stop and return to idle, B to exclude network
+    // OINK mode - B to exclude network
     if (currentMode == PorkchopMode::OINK_MODE) {
-        if (M5Cardputer.Keyboard.isKeyPressed(KEY_BACKSPACE)) {
-            setMode(PorkchopMode::IDLE);
-            return;
-        }
         // B key - add selected network to BOAR BROS exclusion list
         static bool bWasPressed = false;
         bool bPressed = M5Cardputer.Keyboard.isKeyPressed('b') || M5Cardputer.Keyboard.isKeyPressed('B');
@@ -515,13 +591,8 @@ void Porkchop::handleInput() {
         dWasPressed_oink = dPressed;
     }
     
-    // DNH mode - D key to switch back to OINK, Backspace to exit
+    // DNH mode - D key to switch back to OINK
     if (currentMode == PorkchopMode::DNH_MODE) {
-        if (M5Cardputer.Keyboard.isKeyPressed(KEY_BACKSPACE)) {
-            setMode(PorkchopMode::IDLE);
-            return;
-        }
-        
         // D key - switch back to OINK mode (seamless mode switch)
         static bool dWasPressed_dnh = false;
         bool dPressed = M5Cardputer.Keyboard.isKeyPressed('d') || M5Cardputer.Keyboard.isKeyPressed('D');
@@ -541,115 +612,26 @@ void Porkchop::handleInput() {
         dWasPressed_dnh = dPressed;
     }
     
-    // WARHOG mode - Backspace to stop and return to idle
+    // WARHOG mode - use ESC to return to idle
     if (currentMode == PorkchopMode::WARHOG_MODE) {
-        if (M5Cardputer.Keyboard.isKeyPressed(KEY_BACKSPACE)) {
-            setMode(PorkchopMode::IDLE);
-            return;
-        }
+        // no-op: ESC handled globally
     }
     
-    // PIGGYBLUES mode - Backspace to stop and return to idle
+    // PIGGYBLUES mode - use ESC to return to idle
     if (currentMode == PorkchopMode::PIGGYBLUES_MODE) {
-        if (M5Cardputer.Keyboard.isKeyPressed(KEY_BACKSPACE)) {
-            setMode(PorkchopMode::IDLE);
-            return;
-        }
+        // no-op: ESC handled globally
     }
     
-    // CALL PAPA mode - device selection and sync control
-    if (currentMode == PorkchopMode::CALL_PAPA_MODE) {
-        if (M5Cardputer.Keyboard.isKeyPressed(KEY_BACKSPACE)) {
-            setMode(PorkchopMode::IDLE);
-            return;
-        }
-        
-        // Up/Down to select device
-        static bool upWasPressed = false;
-        static bool downWasPressed = false;
-        bool upPressed = M5Cardputer.Keyboard.isKeyPressed(';');
-        bool downPressed = M5Cardputer.Keyboard.isKeyPressed('.');
-        
-        if (upPressed && !upWasPressed) {
-            uint8_t idx = CallPapaMode::getSelectedIndex();
-            if (idx > 0) {
-                CallPapaMode::selectDevice(idx - 1);
-            }
-        }
-        upWasPressed = upPressed;
-        
-        if (downPressed && !downWasPressed) {
-            uint8_t idx = CallPapaMode::getSelectedIndex();
-            if (idx < CallPapaMode::getDeviceCount() - 1) {
-                CallPapaMode::selectDevice(idx + 1);
-            }
-        }
-        downWasPressed = downPressed;
-        
-        // Enter to connect or start sync
-        if (M5Cardputer.Keyboard.isKeyPressed(KEY_ENTER)) {
-            if (!CallPapaMode::isConnected()) {
-                // Connect to selected device
-                if (CallPapaMode::getDeviceCount() > 0) {
-                    CallPapaMode::connectTo(CallPapaMode::getSelectedIndex());
-                }
-            } else if (!CallPapaMode::isSyncing()) {
-                // Start sync
-                CallPapaMode::startSync();
-            }
-        }
-        
-        // R to rescan
-        static bool rWasPressed = false;
-        bool rPressed = M5Cardputer.Keyboard.isKeyPressed('r') || M5Cardputer.Keyboard.isKeyPressed('R');
-        if (rPressed && !rWasPressed) {
-            if (!CallPapaMode::isConnected()) {
-                CallPapaMode::startScan();
-            }
-        }
-        rWasPressed = rPressed;
-        
-        // A to abort sync
-        static bool aWasPressed = false;
-        bool aPressed = M5Cardputer.Keyboard.isKeyPressed('a') || M5Cardputer.Keyboard.isKeyPressed('A');
-        if (aPressed && !aWasPressed) {
-            if (CallPapaMode::isSyncing()) {
-                CallPapaMode::abortSync();
-            }
-        }
-        aWasPressed = aPressed;
-        
-        // D to disconnect
-        static bool dcWasPressed = false;
-        bool dcPressed = M5Cardputer.Keyboard.isKeyPressed('d') || M5Cardputer.Keyboard.isKeyPressed('D');
-        if (dcPressed && !dcWasPressed) {
-            if (CallPapaMode::isConnected()) {
-                CallPapaMode::disconnect();
-            }
-        }
-        dcWasPressed = dcPressed;
-    }
     
-    // SPECTRUM mode - Backspace to stop and return to idle
-    // BUT: if monitoring a network, let spectrum handle the key to exit monitor first
+    // SPECTRUM mode - ESC returns to idle globally
+    // If monitoring a network, Spectrum handles its own keys
     if (currentMode == PorkchopMode::SPECTRUM_MODE) {
-        if (M5Cardputer.Keyboard.isKeyPressed(KEY_BACKSPACE) && !SpectrumMode::isMonitoring()) {
-            setMode(PorkchopMode::IDLE);
-            return;
-        }
+        // no-op: ESC handled globally
     }
     
-    // FILE_TRANSFER mode - Backspace to stop and return to menu
+    // FILE_TRANSFER mode - use ESC to return to idle
     if (currentMode == PorkchopMode::FILE_TRANSFER) {
-        if (M5Cardputer.Keyboard.isKeyPressed(KEY_BACKSPACE)) {
-            setMode(PorkchopMode::MENU);
-            return;
-        }
-    }
-    
-    // ESC (fn+backtick) to return to idle
-    if (keys.fn && M5Cardputer.Keyboard.isKeyPressed('`')) {
-        setMode(PorkchopMode::IDLE);
+        // no-op: ESC handled globally
     }
 }
 
@@ -670,6 +652,13 @@ void Porkchop::updateMode() {
         case PorkchopMode::SPECTRUM_MODE:
             SpectrumMode::update();
             break;
+        case PorkchopMode::MARCO_MODE:
+            MarcoMode::update();
+            // Check if user exited
+            if (!MarcoMode::isRunning()) {
+                setMode(PorkchopMode::MENU);
+            }
+            break;
         case PorkchopMode::CAPTURES:
             CapturesMenu::update();
             if (!CapturesMenu::isActive()) {
@@ -685,9 +674,15 @@ void Porkchop::updateMode() {
         case PorkchopMode::FILE_TRANSFER:
             FileServer::update();
             break;
-        case PorkchopMode::LOG_VIEWER:
-            LogViewer::update();
-            if (!LogViewer::isActive()) {
+        case PorkchopMode::CRASH_VIEWER:
+            CrashViewer::update();
+            if (!CrashViewer::isActive()) {
+                setMode(PorkchopMode::MENU);
+            }
+            break;
+        case PorkchopMode::DIAGNOSTICS:
+            DiagnosticsMenu::update();
+            if (!DiagnosticsMenu::isActive()) {
                 setMode(PorkchopMode::MENU);
             }
             break;
@@ -715,37 +710,19 @@ void Porkchop::updateMode() {
                 setMode(PorkchopMode::MENU);
             }
             break;
-        case PorkchopMode::CALL_PAPA_MODE:
-            CallPapaMode::update();
-            // AUTO-EXIT: When dialogue completes, exit to idle
-            {
-                bool syncComplete = CallPapaMode::isSyncDialogueComplete();
-                // DEBUG-ISSUE3: Trace auto-exit check
-                static uint32_t lastExitDebug = 0;
-                if (millis() - lastExitDebug > 2000) {
-                    Serial.printf("[DEBUG-ISSUE3] Auto-exit check: isSyncDialogueComplete()=%d\n", syncComplete);
-                    lastExitDebug = millis();
-                }
-                if (syncComplete) {
-                    Serial.println("[PORKCHOP] ========== isSyncDialogueComplete() returned TRUE ==========");
-                    Serial.println("[PORKCHOP] Sync dialogue complete - auto-exiting to IDLE");
-                    
-                    // Celebrate AFTER disconnect (not during transfer)
-                    uint16_t synced = CallPapaMode::getTotalSynced();
-                    if (synced > 0) {
-                        char celebrationMsg[64];
-                        snprintf(celebrationMsg, sizeof(celebrationMsg), 
-                                "SYNCED %d FROM SIRLOIN!", synced);
-                        Mood::setStatusMessage(celebrationMsg);
-                        Mood::adjustHappiness(30);  // Big happiness boost
-                        Serial.printf("[PORKCHOP] Celebration: %s\n", celebrationMsg);
-                    }
-                    
-                    CallPapaMode::stop();
-                }
+        case PorkchopMode::BOUNTY_STATUS:
+            BountyStatusMenu::update();
+            if (!BountyStatusMenu::isActive()) {
+                setMode(PorkchopMode::MENU);
             }
-            if (!CallPapaMode::isRunning()) {
-                setMode(PorkchopMode::IDLE);
+            break;
+        case PorkchopMode::PIGSYNC_DEVICE_SELECT:
+            // Update PigSync discovery process (includes dialogue phases)
+            PigSyncMode::update();
+            // Stay in device select mode for terminal display
+            if (!PigSyncMode::isRunning()) {
+                // User exited, go back to menu
+                setMode(PorkchopMode::MENU);
             }
             break;
         default:

@@ -5,6 +5,7 @@
 #include <Arduino.h>
 #include <map>
 #include <set>
+#include <vector>
 #include <esp_wifi.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -20,6 +21,8 @@ inline uint64_t bssidToKey(const uint8_t* bssid) {
 
 class WarhogMode {
 public:
+    static constexpr uint8_t MAX_BOUNTIES = 15;  // Max bounty targets to send
+
     static void init();
     static void start();
     static void stop();
@@ -45,6 +48,11 @@ public:
     static uint32_t getWPANetworks() { return wpaNetworks; }
     static uint32_t getSavedCount() { return savedCount; }  // Geotagged networks (CSV)
     static uint32_t getMLOnlyCount() { return mlOnlyCount; } // ML-only networks (no GPS)
+
+    // === BOUNTY SYSTEM (Phase 5) ===
+    static void markCaptured(const uint8_t* bssid);                   // Track captures to exclude from bounties
+    static void buildBountyList(uint8_t* buffer, uint8_t* count);     // Populate bounty payload buffer (max 15)
+    static std::vector<uint64_t> getUnclaimedBSSIDs();                // Seen but not captured
     
 private:
     static bool running;
@@ -71,6 +79,7 @@ private:
     static std::map<uint64_t, WiFiFeatures> beaconFeatures;
     static uint32_t beaconCount;
     static volatile bool beaconMapBusy;
+    static std::set<uint64_t> capturedBSSIDs; // Networks captured in Oink (exclude from bounties)
     
     // Background scan task
     static TaskHandle_t scanTaskHandle;

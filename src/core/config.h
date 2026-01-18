@@ -32,10 +32,21 @@ enum class MLCollectionMode : uint8_t {
     ENHANCED = 1    // Use promiscuous beacon capture (slower, full features)
 };
 
+// G0 button action
+enum class G0Action : uint8_t {
+    SCREEN_TOGGLE = 0,
+    OINK,
+    DNHAM,
+    SPECTRUM,
+    PIGSYNC
+};
+
+static constexpr uint8_t G0_ACTION_COUNT = 5;
+
 // ML settings
 struct MLConfig {
     bool enabled = true;
-    MLCollectionMode collectionMode = MLCollectionMode::BASIC;  // Data collection mode
+    MLCollectionMode collectionMode = MLCollectionMode::ENHANCED;  // Data collection mode
     String modelPath = "/models/porkchop_model.bin";
     float confidenceThreshold = 0.7f;
     float rogueApThreshold = 0.8f;
@@ -64,7 +75,7 @@ struct BLEConfig {
     uint16_t advDuration = 100;         // ms per advertisement (50-200)
 };
 
-// Personality settings
+// Personality
 struct PersonalityConfig {
     char name[32] = "Porkchop";
     int mood = 50;                      // -100 to 100
@@ -76,7 +87,8 @@ struct PersonalityConfig {
     uint8_t brightness = 80;            // Display brightness 0-100%
     uint8_t dimLevel = 20;              // Dimmed brightness 0-100% (0 = off)
     uint16_t dimTimeout = 30;           // Seconds before dimming (0 = never)
-    uint8_t themeIndex = 0;             // Color theme (0-9, see THEMES array)
+    uint8_t themeIndex = 0;             // Color theme (0-13, see THEMES array)
+    G0Action g0Action = G0Action::SCREEN_TOGGLE;
 };
 
 class Config {

@@ -202,8 +202,16 @@ String GPS::getLocationString() {
 }
 
 String GPS::getTimeString() {
+    char buf[8];
+    getTimeString(buf, sizeof(buf));
+    return String(buf);
+}
+
+void GPS::getTimeString(char* out, size_t len) {
+    if (!out || len == 0) return;
     if (!gps.time.isValid()) {
-        return "--:--";
+        snprintf(out, len, "--:--");
+        return;
     }
     
     // Apply timezone offset from config
@@ -214,7 +222,5 @@ String GPS::getTimeString() {
     if (hour >= 24) hour -= 24;
     if (hour < 0) hour += 24;
     
-    char buf[8];
-    snprintf(buf, sizeof(buf), "%02d:%02d", hour, gps.time.minute());
-    return String(buf);
+    snprintf(out, len, "%02d:%02d", hour, gps.time.minute());
 }

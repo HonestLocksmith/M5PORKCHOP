@@ -7,7 +7,6 @@
 #include <set>
 #include <map>
 #include <FS.h>
-#include "../ml/features.h"
 
 // Maximum clients to track per network
 #define MAX_CLIENTS_PER_NETWORK 20  // Dense environment support (conferences, airports)
@@ -24,7 +23,6 @@ struct DetectedNetwork {
     int8_t rssi;
     uint8_t channel;
     wifi_auth_mode_t authmode;
-    WiFiFeatures features;
     uint32_t lastSeen;
     uint16_t beaconCount;
     bool isTarget;
@@ -34,6 +32,8 @@ struct DetectedNetwork {
     bool isHidden;  // Hidden SSID (needs probe response)
     DetectedClient clients[MAX_CLIENTS_PER_NETWORK];
     uint8_t clientCount;
+    uint32_t lastClientSeen;   // millis() of most recent client activity
+    uint32_t cooldownUntil;    // millis() until eligible for auto-target
 };
 
 // Frame storage for PCAP export - stores full 802.11 frame with headers
@@ -143,6 +143,7 @@ public:
     static uint32_t getPacketCount() { return packetCount; }
     static uint32_t getDeauthCount() { return deauthCount; }
     static uint16_t getNetworkCount() { return networks.size(); }
+    static uint16_t getFilteredCount();
     
     // LOCKING state info (for display)
     static bool isLocking();
@@ -167,6 +168,9 @@ public:
     static void removeBoarBro(uint64_t bssid);  // Remove from exclusion list
     static const std::map<uint64_t, String>& getExcludedMap() { return boarBros; }
     
+    // Stress test injection (no RF)
+    static void injectTestNetwork(const uint8_t* bssid, const char* ssid, uint8_t channel, int8_t rssi, wifi_auth_mode_t authmode, bool hasPMF);
+    
     // Promiscuous mode callback (public for shared use with DO NO HAM mode)
     static void promiscuousCallback(void* buf, wifi_promiscuous_pkt_type_t type);
     
@@ -184,6 +188,11 @@ private:
     static std::vector<CapturedPMKID> pmkids;
     static int targetIndex;
     static uint8_t targetBssid[6];  // Store BSSID to handle index invalidation
+    static char targetSSIDCache[33];
+    static uint8_t targetClientCountCache;
+    static uint8_t targetBssidCache[6];
+    static bool targetHiddenCache;
+    static bool targetCacheValid;
     static int selectionIndex;  // Cursor for network selection
     static uint32_t packetCount;
     static uint32_t deauthCount;
@@ -214,6 +223,7 @@ private:
     static int findOrCreateHandshakeSafe(const uint8_t* bssid, const uint8_t* station);  // Main thread only
     static int findOrCreatePMKIDSafe(const uint8_t* bssid, const uint8_t* station);      // Main thread only
     static void sortNetworksByPriority();
+    static void updateTargetCache();
     static bool hasHandshakeFor(const uint8_t* bssid);
     static int getNextTarget();  // Smart target selection
     static void writePCAPHeader(fs::File& f);
@@ -222,4 +232,8 @@ private:
     // BOAR BROS storage
     static std::map<uint64_t, String> boarBros;  // Excluded BSSIDs -> SSID
     static uint64_t bssidToUint64(const uint8_t* bssid);  // Convert 6-byte BSSID to uint64
+    static void recordFilteredNetwork(const uint8_t* bssid);
+    static uint16_t filteredCount;
+    static uint64_t filteredCache[64];
+    static uint8_t filteredCacheIndex;
 };

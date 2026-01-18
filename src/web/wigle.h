@@ -30,6 +30,7 @@ public:
     static void markUploaded(const char* filename);   // Mark as uploaded
     static void removeFromUploaded(const char* filename); // Remove from tracking
     static uint16_t getUploadedCount();               // Total uploads tracked
+    static bool isBusy();
     
     // Status
     static const char* getLastError();
@@ -37,14 +38,26 @@ public:
     
     // API credentials check
     static bool hasCredentials();
+
+    /**
+     * @brief Free the uploaded files list from memory.
+     *
+     * The uploadedFiles vector can consume heap proportional to the number
+     * of entries tracked.  Before performing TLS operations that require
+     * large contiguous heap blocks, callers may persist the list and then
+     * call this function to clear it.  It resets the lazy load flag so
+     * that the list will be reloaded from disk on the next access.
+     */
+    static void freeUploadedListMemory();
     
 private:
     static char lastError[64];
     static char statusMessage[64];
-    
+
     // Uploaded files tracking
     static std::vector<String> uploadedFiles;
     static bool listLoaded;  // Guard for lazy loading
+    static bool busy;
     
     // File paths
     static constexpr const char* UPLOADED_FILE = "/wigle_uploaded.txt";

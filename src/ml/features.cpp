@@ -1,6 +1,10 @@
 // ML Feature Extraction implementation
 
 #include "features.h"
+
+#if !PORKCHOP_ENABLE_ML
+// ML disabled: skip feature extractor implementation
+#else
 #include <string.h>
 
 // Static members
@@ -439,3 +443,4 @@ float FeatureExtractor::normalize(float value, float mean, float std) {
     if (std < 0.001f) return 0.0f;
     return (value - mean) / std;
 }
+#endif  // PORKCHOP_ENABLE_ML

@@ -6,6 +6,7 @@
 #include "challenges.h"
 #include "../ui/display.h"
 #include "../ui/swine_stats.h"
+#include "../audio/sfx.h"
 #include <M5Unified.h>
 #include <SD.h>
 #include <esp_mac.h>
@@ -30,6 +31,15 @@ void (*XP::levelUpCallback)(uint8_t, uint8_t) = nullptr;
 // Deferred save flag - set by achievements/unlockables, processed by processPendingSave()
 // Avoids SD writes during active WiFi promiscuous mode (bus contention)
 static volatile bool pendingSaveFlag = false;
+
+// Achievement queue - prevents cascade of sounds/toasts when multiple unlock at once
+// Achievements are queued and processed one per frame via processAchievementQueue()
+static const uint8_t ACH_QUEUE_SIZE = 8;
+static PorkAchievement achQueue[ACH_QUEUE_SIZE];
+static uint8_t achQueueHead = 0;
+static uint8_t achQueueTail = 0;
+static uint32_t lastAchievementTime = 0;
+static const uint32_t ACH_COOLDOWN_MS = 600;  // Min time between achievement celebrations
 
 // XP values for each event type (v0.1.8 rebalanced - nerf spam, buff skill)
 static const uint16_t XP_VALUES[] = {
@@ -59,10 +69,11 @@ static const uint16_t XP_VALUES[] = {
     2,      // DNH_NETWORK_PASSIVE - same as regular network
     150,    // DNH_PMKID_GHOST (buffed: very rare passive!)
     5,      // BOAR_BRO_ADDED
-    15      // BOAR_BRO_MERCY - mid-attack exclusion
+    15,     // BOAR_BRO_MERCY - mid-attack exclusion
+    15      // SMOKED_BACON - rare upload bonus
 };
 
-// 8 class names (every 5 levels)
+// 10 class names (every 5 levels)
 static const char* CLASS_NAMES[] = {
     "SH0AT",     // L1-5
     "SN1FF3R",   // L6-10
@@ -71,7 +82,9 @@ static const char* CLASS_NAMES[] = {
     "R0GU3",     // L21-25
     "EXPL01T",   // L26-30
     "WARL0RD",   // L31-35
-    "L3G3ND"     // L36-40
+    "L3G3ND",    // L36-40
+    "K3RN3L H0G",    // L41-45
+    "B4C0NM4NC3R"    // L46-50
 };
 
 // Title override names (unlockable special titles)
@@ -82,7 +95,7 @@ static const char* TITLE_OVERRIDE_NAMES[] = {
     "Z3N_M4ST3R"      // Unlocked by ACH_ZEN_MASTER
 };
 
-// 40 rank titles - hacker/grindhouse/tarantino + pig flavor
+// 50 rank titles - hacker/grindhouse/tarantino + pig flavor
 static const char* RANK_TITLES[] = {
     // Tier 1: Noob (1-5)
     "BACON N00B",
@@ -131,9 +144,21 @@ static const char* RANK_TITLES[] = {
     "CRUNCH P1G",
     "DARK TANGENT",
     "PHIBER 0PT1K",
-    "MUDGE UNCHA1NED"
+    "MUDGE UNCHA1NED",
+    // Tier 9: Gibson grind (41-45)
+    "K3RN3L PAN1C H0G",
+    "SYSCALL SW1N3",
+    "R00TK1T R1ND3R",
+    "ICEBREAKER BOAR",
+    "SPRAWL P1GPR0XY",
+    // Tier 10: Gibson climax (46-50)
+    "D3CK J0CK3Y H0G",
+    "CYBERSP4CE SW1N3",
+    "NULL GR4V1TY BOAR",
+    "BL4CK 1C3 P1G",
+    "B4C0NM4NC3R"
 };
-static const uint8_t MAX_LEVEL = 40;
+static const uint8_t MAX_LEVEL = 50;
 
 // Achievement names (must match enum order)
 static const char* ACHIEVEMENT_NAMES[] = {
@@ -229,7 +254,7 @@ static const uint8_t LEVELUP_PHRASE_COUNT = sizeof(LEVELUP_PHRASES) / sizeof(LEV
 // "if you're reading this, you're almost there"
 // ============================================
 
-static uint32_t calculateDeviceBoundCRC(const PorkXPData* xpData) {
+static uint32_t calculateDeviceBoundCRC(const PorkXPData* xpData, size_t dataSize = sizeof(PorkXPData)) {
     // six bytes of truth, burned forever
     uint8_t mac[6];
     esp_efuse_mac_get_default(mac);
@@ -237,7 +262,7 @@ static uint32_t calculateDeviceBoundCRC(const PorkXPData* xpData) {
     // the polynomial of trust
     uint32_t crc = 0xFFFFFFFF;
     const uint8_t* bytes = (const uint8_t*)xpData;
-    for (size_t i = 0; i < sizeof(PorkXPData); i++) {
+    for (size_t i = 0; i < dataSize; i++) {
         crc ^= bytes[i];
         for (int j = 0; j < 8; j++) {
             crc = (crc >> 1) ^ (0xEDB88320 & -(crc & 1));
@@ -299,25 +324,50 @@ bool XP::restoreFromSD() {
         return false;
     }
     
-    // the weight of proof
-    size_t expectedSize = sizeof(PorkXPData) + sizeof(uint32_t);
+    size_t signatureSize = sizeof(uint32_t);
     size_t fileSize = f.size();
     
-    // Handle legacy backups (no signature) - one-time migration
-    if (fileSize == sizeof(PorkXPData)) {
-        Serial.println("[XP] SD restore: legacy backup detected, migrating...");
-        PorkXPData backup = {0};
-        size_t read = f.read((uint8_t*)&backup, sizeof(PorkXPData));
+    if (fileSize <= signatureSize) {
+        Serial.printf("[XP] SD restore: size too small (%d bytes)\n", fileSize);
         f.close();
+        return false;
+    }
+    
+    PorkXPData backup = {0};
+    uint32_t storedSignature = 0;
+    size_t dataSize = fileSize - signatureSize;
+    bool signatureValid = false;
+    
+    if (dataSize <= sizeof(PorkXPData)) {
+        size_t read = f.read((uint8_t*)&backup, dataSize);
+        read += f.read((uint8_t*)&storedSignature, signatureSize);
+        if (read == fileSize) {
+            uint32_t expectedSignature = calculateDeviceBoundCRC(&backup, dataSize);
+            signatureValid = (storedSignature == expectedSignature);
+        }
+    }
+    
+    if (!signatureValid) {
+        if (fileSize > sizeof(PorkXPData)) {
+            Serial.printf("[XP] SD restore: size mismatch (%d bytes)\n", fileSize);
+            f.close();
+            return false;
+        }
         
-        if (read != sizeof(PorkXPData)) {
+        // Legacy unsigned backup
+        f.seek(0);
+        backup = {0};
+        size_t read = f.read((uint8_t*)&backup, fileSize);
+        if (read != fileSize) {
             Serial.println("[XP] SD restore: legacy read failed");
+            f.close();
             return false;
         }
         
         // Validate backup has actual data
         if (backup.totalXP == 0 && backup.lifetimeNetworks == 0 && backup.sessions == 0) {
             Serial.println("[XP] SD restore: legacy backup empty, skipping");
+            f.close();
             return false;
         }
         
@@ -326,38 +376,12 @@ bool XP::restoreFromSD() {
         data.cachedLevel = calculateLevel(data.totalXP);
         Serial.printf("[XP] SD restore: migrated legacy LV%d (%lu XP)\n",
                       data.cachedLevel, data.totalXP);
+        f.close();
         save();  // This will write the new signed format
         return true;
     }
     
-    // Verify new format size
-    if (fileSize != expectedSize) {
-        Serial.printf("[XP] SD restore: size mismatch (%d vs %d)\n", fileSize, expectedSize);
-        f.close();
-        return false;
-    }
-    
-    // Read data and signature
-    PorkXPData backup = {0};
-    uint32_t storedSignature = 0;
-    
-    size_t read = f.read((uint8_t*)&backup, sizeof(PorkXPData));
-    read += f.read((uint8_t*)&storedSignature, sizeof(storedSignature));
     f.close();
-    
-    if (read != expectedSize) {
-        Serial.printf("[XP] SD restore: read failed (%d/%d bytes)\n", read, expectedSize);
-        return false;
-    }
-    
-    // the moment of truth
-    uint32_t expectedSignature = calculateDeviceBoundCRC(&backup);
-    if (storedSignature != expectedSignature) {
-        Serial.printf("[XP] nice try. back to LV1.\n",
-                      storedSignature, expectedSignature);
-        Serial.println("[XP] the source is public. figure it out.");
-        return false;
-    }
     
     // Validate backup has actual data (not zeroed)
     if (backup.totalXP == 0 && backup.lifetimeNetworks == 0 && backup.sessions == 0) {
@@ -381,6 +405,11 @@ bool XP::restoreFromSD() {
 
 void XP::init() {
     if (initialized) return;
+    
+    // Initialize achievement queue
+    achQueueHead = 0;
+    achQueueTail = 0;
+    lastAchievementTime = 0;
     
     load();
     
@@ -425,6 +454,7 @@ void XP::load() {
     data.androidBLE = prefs.getUInt("android", 0);
     data.samsungBLE = prefs.getUInt("samsung", 0);
     data.windowsBLE = prefs.getUInt("windows", 0);
+    data.rouletteWins = prefs.getUInt("roulette", 0);
     data.sessions = prefs.getUShort("sessions", 0);
     data.wepFound = prefs.getBool("wep", false);
     // DO NO HAM / BOAR BROS persistent counters (v0.1.4+)
@@ -460,6 +490,7 @@ void XP::save() {
     prefs.putUInt("android", data.androidBLE);
     prefs.putUInt("samsung", data.samsungBLE);
     prefs.putUInt("windows", data.windowsBLE);
+    prefs.putUInt("roulette", data.rouletteWins);
     prefs.putUShort("sessions", data.sessions);
     prefs.putBool("wep", data.wepFound);
     // DO NO HAM / BOAR BROS persistent counters (v0.1.4+)
@@ -585,7 +616,7 @@ void XP::addXP(XPEvent event) {
             // ULTRA STREAK! celebration at 20 captures
             if (captureStreak == 20 && !ultraStreakAnnounced) {
                 Display::showToast("ULTRA STREAK!");
-                Display::flashSiren(5);  // Extra sirens for ultra!
+                SFX::play(SFX::ULTRA_STREAK);  // Non-blocking celebration
                 ultraStreakAnnounced = true;
             }
             // Check for clutch capture (handshake at <10% battery)
@@ -606,7 +637,7 @@ void XP::addXP(XPEvent event) {
             // ULTRA STREAK! celebration at 20 captures
             if (captureStreak == 20 && !ultraStreakAnnounced) {
                 Display::showToast("ULTRA STREAK!");
-                Display::flashSiren(5);  // Extra sirens for ultra!
+                SFX::play(SFX::ULTRA_STREAK);  // Non-blocking celebration
                 ultraStreakAnnounced = true;
             }
             // Check for clutch capture (PMKID at <10% battery)
@@ -626,7 +657,7 @@ void XP::addXP(XPEvent event) {
             // Anti-farm: cap WARHOG XP per session
             if (sessionWarhogXP >= WARHOG_XP_CAP) {
                 if (!warhogCapWarned) {
-                    Display::showToast("SNIFFED ENOUGH. REST.");
+                    Display::notify(NoticeKind::WARNING, "SNIFFED ENOUGH. REST.");
                     warhogCapWarned = true;
                 }
                 amount = 0;  // Still track stats, no XP
@@ -640,7 +671,7 @@ void XP::addXP(XPEvent event) {
             // Anti-farm: cap BLE XP per session
             if (sessionBleXP >= BLE_XP_CAP) {
                 if (!bleCapWarned) {
-                    Display::showToast("SPAM TIRED. FIND PREY.");
+                    Display::notify(NoticeKind::WARNING, "SPAM TIRED. FIND PREY.");
                     bleCapWarned = true;
                 }
                 amount = 0;
@@ -772,7 +803,7 @@ void XP::addXP(uint16_t amount) {
             // JACKPOT! 2% chance for 5x
             amount *= 5;
             Display::showToast("JACKPOT!");
-            Display::flashSiren(3);  // Police lights!
+            SFX::play(SFX::JACKPOT_XP);  // Non-blocking celebration
         } else if (roll >= 90) {
             // Bonus! 8% chance for 2x
             amount *= 2;
@@ -820,6 +851,44 @@ void XP::addXP(uint16_t amount) {
             levelUpCallback(oldLevel, newLevel);
         }
     }
+}
+
+void XP::addXPSilent(uint16_t amount) {
+    // Silent XP add - no JACKPOT check, no toast, no sound
+    // Used for bonus XP from challenges/achievements where celebration already shown
+    
+    // Apply buff/debuff XP multiplier (SNOUT$HARP +25%, F0GSNOUT -15%)
+    float mult = SwineStats::getXPMultiplier();
+    uint16_t modifiedAmount = (uint16_t)(amount * mult);
+    if (modifiedAmount < 1) modifiedAmount = 1;
+    
+    uint8_t oldLevel = data.cachedLevel;
+    
+    data.totalXP += modifiedAmount;
+    session.xp += modifiedAmount;
+
+    // Record last significant XP gain for UI
+    if (modifiedAmount > 2) {
+        lastXPGainAmount = modifiedAmount;
+        lastXPGainMs = millis();
+    }
+    
+    uint8_t newLevel = calculateLevel(data.totalXP);
+    
+    if (newLevel > oldLevel) {
+        data.cachedLevel = newLevel;
+        Serial.printf("[XP] LEVEL UP! %d -> %d (%s)\n", 
+                      oldLevel, newLevel, getTitleForLevel(newLevel));
+        SDLog::log("XP", "LEVEL UP: %d -> %d (%s)", oldLevel, newLevel, getTitleForLevel(newLevel));
+        
+        if (levelUpCallback) {
+            levelUpCallback(oldLevel, newLevel);
+        }
+    }
+}
+
+void XP::addRouletteWin() {
+    data.rouletteWins++;
 }
 
 void XP::addDistance(uint32_t meters) {
@@ -877,7 +946,7 @@ void XP::updateSessionTime() {
 
 uint8_t XP::calculateLevel(uint32_t xp) {
     // XP thresholds for each level
-    // Designed for: L1-5 quick, L6-20 steady, L21-40 grind
+    // Designed for: L1-5 quick, L6-20 steady, L21-50 grind
     uint32_t thresholds[MAX_LEVEL] = {
         0,      // L1
         100,    // L2
@@ -914,11 +983,21 @@ uint8_t XP::calculateLevel(uint32_t xp) {
         252000, // L33
         284000, // L34
         319000, // L35
-        359000, // L36
-        404000, // L37
-        454000, // L38
-        514000, // L39
-        600000  // L40
+        359000,  // L36
+        404000,  // L37
+        454000,  // L38
+        514000,  // L39
+        600000,  // L40
+        680000,  // L41
+        770000,  // L42
+        870000,  // L43
+        980000,  // L44
+        1100000, // L45
+        1230000, // L46
+        1370000, // L47
+        1520000, // L48
+        1680000, // L49
+        1850000  // L50
     };
     
     for (uint8_t i = MAX_LEVEL - 1; i > 0; i--) {
@@ -938,7 +1017,8 @@ uint32_t XP::getXPForLevel(uint8_t level) {
         0, 100, 300, 600, 1000, 1500, 2300, 3400, 4800, 6500,
         8500, 11000, 14000, 17500, 21500, 26000, 31000, 36500, 42500, 49000,
         56000, 64000, 73000, 83000, 94000, 106000, 120000, 136000, 154000, 174000,
-        197000, 223000, 252000, 284000, 319000, 359000, 404000, 454000, 514000, 600000
+        197000, 223000, 252000, 284000, 319000, 359000, 404000, 454000, 514000, 600000,
+        680000, 770000, 870000, 980000, 1100000, 1230000, 1370000, 1520000, 1680000, 1850000
     };
     
     return thresholds[level - 1];
@@ -1048,6 +1128,8 @@ PorkClass XP::getClass() {
 }
 
 PorkClass XP::getClassForLevel(uint8_t level) {
+    if (level >= 46) return PorkClass::B4C0NM4NC3R;
+    if (level >= 41) return PorkClass::K3RN3L_H0G;
     if (level >= 36) return PorkClass::L3G3ND;
     if (level >= 31) return PorkClass::WARL0RD;
     if (level >= 26) return PorkClass::EXPL01T;
@@ -1064,7 +1146,7 @@ const char* XP::getClassName() {
 
 const char* XP::getClassNameFor(PorkClass cls) {
     uint8_t idx = static_cast<uint8_t>(cls);
-    if (idx > 7) idx = 7;
+    if (idx > 9) idx = 9;
     return CLASS_NAMES[idx];
 }
 
@@ -1088,28 +1170,47 @@ void XP::unlockAchievement(PorkAchievement ach) {
     Serial.printf("[XP] Achievement unlocked: %s\n", ACHIEVEMENT_NAMES[idx]);
     SDLog::log("XP", "Achievement: %s", ACHIEVEMENT_NAMES[idx]);
     
-    // pig earned a badge. pig deserves fanfare.
-    // but only if system is fully booted (Display ready)
+    // Queue achievement for celebration (prevents cascade of sounds)
+    // Celebration happens in processAchievementQueue() called from main loop
     if (initialized) {
-        char toastMsg[48];
-        snprintf(toastMsg, sizeof(toastMsg), "* %s *", ACHIEVEMENT_NAMES[idx]);
-        Display::showToast(toastMsg);
-        
-        // distinct jingle - different from level-up and class promotion
-        if (Config::personality().soundEnabled) {
-            M5.Speaker.tone(600, 80);
-            delay(100);
-            M5.Speaker.tone(900, 80);
-            delay(100);
-            M5.Speaker.tone(1200, 120);
+        uint8_t nextHead = (achQueueHead + 1) % ACH_QUEUE_SIZE;
+        if (nextHead != achQueueTail) {  // Not full
+            achQueue[achQueueHead] = ach;
+            achQueueHead = nextHead;
         }
-        
-        delay(500);  // let user read the toast
+        // If queue full, achievement is still unlocked, just no fanfare (rare edge case)
     }
     
     // Defer save to avoid SD writes during active WiFi mode
     // Will be processed by processPendingSave() in main loop or mode exit
     pendingSaveFlag = true;
+}
+
+void XP::processAchievementQueue() {
+    // Process ONE queued achievement per call (debounced)
+    // Called from main loop to spread celebrations across frames
+    if (achQueueTail == achQueueHead) return;  // Queue empty
+    
+    uint32_t now = millis();
+    if (now - lastAchievementTime < ACH_COOLDOWN_MS) return;  // Cooldown active
+    
+    PorkAchievement ach = achQueue[achQueueTail];
+    achQueueTail = (achQueueTail + 1) % ACH_QUEUE_SIZE;
+    lastAchievementTime = now;
+    
+    // Find achievement name
+    uint8_t idx = 0;
+    uint64_t mask = 1ULL;
+    while (mask < (uint64_t)ach && idx < ACHIEVEMENT_COUNT - 1) {
+        mask <<= 1;
+        idx++;
+    }
+    
+    // NOW do the celebration (one at a time, with cooldown)
+    char toastMsg[48];
+    snprintf(toastMsg, sizeof(toastMsg), "* %s *", ACHIEVEMENT_NAMES[idx]);
+    Display::showToast(toastMsg);
+    SFX::play(SFX::ACHIEVEMENT);
 }
 
 bool XP::hasAchievement(PorkAchievement ach) {
@@ -1416,7 +1517,7 @@ void XP::checkAchievements() {
     }
     
     // Max level reached
-    if (data.cachedLevel >= 40 && !hasAchievement(ACH_MAX_LEVEL)) {
+    if (data.cachedLevel >= 50 && !hasAchievement(ACH_MAX_LEVEL)) {
         unlockAchievement(ACH_MAX_LEVEL);
     }
     
@@ -1491,13 +1592,17 @@ void XP::setLevelUpCallback(void (*callback)(uint8_t, uint8_t)) {
 }
 
 void XP::drawBar(M5Canvas& canvas) {
-    // Draw XP bar at bottom of main canvas (y=91, in the empty space)
+    // Draw XP bar at TOP of main canvas (y=0) with inverted colors for visibility
     // Format: "L## TITLE_FULL      ######.......... 100%"
     // Progress bar and percentage aligned to right edge
-    int barY = 91;
+    int barY = 1;
+    int barH = 10;  // Height of inverted background strip
+    
+    // Draw inverted background strip
+    canvas.fillRect(0, 0, DISPLAY_W, barH, COLOR_FG);
     
     canvas.setTextSize(1);
-    canvas.setTextColor(COLOR_FG);
+    canvas.setTextColor(COLOR_BG);  // Inverted text color
     canvas.setTextDatum(top_left);
     
     // Calculate right-aligned elements first
@@ -1563,4 +1668,63 @@ void XP::drawBar(M5Canvas& canvas) {
         titleStr = titleStr.substring(0, titleStr.length() - 2) + "..";
     }
     canvas.drawString(titleStr, titleX, barY);
+}
+
+// ============ TOP BAR XP NOTIFICATION (Option B) ============
+// Shows inverted XP info in top bar for 5 seconds after XP gain
+
+static const uint32_t XP_TOPBAR_DISPLAY_MS = 5000;  // 5 seconds
+
+bool XP::shouldShowXPNotification() {
+    // Show notification for 5 seconds after any XP gain > 2
+    return (lastXPGainAmount > 2 && (millis() - lastXPGainMs) < XP_TOPBAR_DISPLAY_MS);
+}
+
+uint16_t XP::getLastXPGainAmount() {
+    return lastXPGainAmount;
+}
+
+void XP::drawTopBarXP(M5Canvas& topBar) {
+    // Draw inverted XP bar in top bar (replaces normal top bar content)
+    // Format: "L## TITLE +XX XP!" or "L## TITLE ####.... %%"
+    
+    // Invert top bar
+    topBar.fillSprite(COLOR_FG);
+    topBar.setTextColor(COLOR_BG);
+    topBar.setTextSize(1);
+    topBar.setTextDatum(top_left);
+    
+    // Build level string
+    char levelStr[8];
+    snprintf(levelStr, sizeof(levelStr), "L%d", getLevel());
+    
+    // Get title
+    const char* title = getTitle();
+    
+    // Build XP gain string with progress
+    uint8_t progress = getProgress();
+    char xpStr[32];
+    snprintf(xpStr, sizeof(xpStr), "+%u XP (%d%%)", (unsigned)lastXPGainAmount, progress);
+    
+    // Calculate positions
+    int levelW = topBar.textWidth(levelStr);
+    int titleX = 2 + levelW + 4;
+    int xpW = topBar.textWidth(xpStr);
+    int xpX = DISPLAY_W - xpW - 2;
+    
+    // Max title width
+    int maxTitleW = xpX - titleX - 6;
+    String titleStr = title;
+    while (topBar.textWidth(titleStr) > maxTitleW && titleStr.length() > 3) {
+        titleStr = titleStr.substring(0, titleStr.length() - 1);
+    }
+    if (titleStr.length() < strlen(title)) {
+        titleStr = titleStr.substring(0, titleStr.length() - 2) + "..";
+    }
+    
+    // Draw
+    topBar.drawString(levelStr, 2, 3);
+    topBar.drawString(titleStr, titleX, 3);
+    topBar.setTextDatum(top_right);
+    topBar.drawString(xpStr, DISPLAY_W - 2, 3);
 }

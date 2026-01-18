@@ -1,11 +1,13 @@
 // Piglet mood implementation
 
 #include "mood.h"
+#include "weather.h"
 #include "../core/config.h"
 #include "../core/xp.h"
 #include "../core/porkchop.h"
 #include "../ui/display.h"
 #include "../modes/oink.h"
+#include "../audio/sfx.h"
 #include <Preferences.h>
 
 extern Porkchop porkchop;
@@ -14,15 +16,14 @@ extern Porkchop porkchop;
 static Preferences moodPrefs;
 static const char* MOOD_NVS_NAMESPACE = "porkmood";
 
-// Riddle LED state - declared early for processQueue()
-static bool riddleActive = false;
-
 // Static members
 String Mood::currentPhrase = "oink";
 int Mood::happiness = 50;
 uint32_t Mood::lastPhraseChange = 0;
 uint32_t Mood::phraseInterval = 5000;
 uint32_t Mood::lastActivityTime = 0;
+static String lastStatusMessage = "";
+static uint32_t lastStatusMessageTime = 0;
 
 // Mood momentum system
 int Mood::momentumBoost = 0;
@@ -46,6 +47,9 @@ static const int MOOD_PEEK_LOW_THRESHOLD = -30;   // Sad peek triggers below thi
 
 // Bored state tracking - prevents HUNTING from overwriting SLEEPY in OINK mode
 static bool isBoredState = false;
+
+// Dialogue lock - prevents automatic phrase selection during BLE sync dialogue
+static bool dialogueLocked = false;
 
 // Force trigger a mood peek (for significant events like handshake capture)
 static void forceMoodPeek() {
@@ -93,6 +97,14 @@ void Mood::adjustHappiness(int delta) {
     happiness = constrain(happiness + delta, -100, 100);
 }
 
+void Mood::setDialogueLock(bool locked) {
+    dialogueLocked = locked;
+}
+
+bool Mood::isDialogueLocked() {
+    return dialogueLocked;
+}
+
 // --- Phase 6: Phrase Chaining ---
 // Queue up to 4 phrases for sequential display (expanded for 5-line riddles)
 
@@ -133,12 +145,6 @@ static bool processQueue() {
     Mood::phraseQueueCount--;
     Mood::lastQueuePop = now;
     Mood::lastPhraseChange = now;
-    
-    // If riddle just finished, turn off LED
-    if (Mood::phraseQueueCount == 0 && riddleActive) {
-        riddleActive = false;
-        Display::setLED(0, 0, 0);  // LED off - riddle complete
-    }
     
     return Mood::phraseQueueCount > 0;  // True if more phrases waiting
 }
@@ -207,8 +213,6 @@ static const int RIDDLE_COUNT = 5;
 
 // Once per boot - shown flag persists until reboot
 static bool riddleShownThisBoot = false;
-// riddleActive declared earlier for processQueue() access
-
 // Function to trigger a riddle (called from selectPhrase)
 static bool tryQueueRiddle() {
     // Already shown a riddle this boot? Never again until reboot
@@ -223,8 +227,6 @@ static bool tryQueueRiddle() {
     
     // Mark as shown - no more riddles this boot
     riddleShownThisBoot = true;
-    riddleActive = true;  // LED mode active
-    Display::setLED(255, 0, 0);  // Red glow during riddle
     
     // Achievement for witnessing the prophecy
     if (!XP::hasAchievement(ACH_PROPHECY_WITNESS)) {
@@ -826,8 +828,21 @@ void Mood::update() {
     // Natural happiness decay
     if (now - lastPhraseChange > phraseInterval) {
         happiness = constrain(happiness - 1, -100, 100);
-        selectPhrase();
+        
+        // Skip automatic phrase selection if dialogue is locked (BLE sync in progress)
+        // This prevents mood phrases from overwriting Papa/Son dialogue
+        if (!dialogueLocked) {
+            selectPhrase();
+        }
         lastPhraseChange = now;
+        
+        // Random cute jump in IDLE mode when happy (0.5% chance per phrase cycle)
+        // Makes the pig feel alive - spontaneous little hops
+        if (porkchop.getMode() == PorkchopMode::IDLE && getEffectiveHappiness() > 20) {
+            if (random(0, 200) == 0) {  // 0.5% chance
+                Avatar::cuteJump();
+            }
+        }
     }
     
     updateAvatarState();
@@ -840,6 +855,9 @@ void Mood::onHandshakeCaptured(const char* apName) {
     
     // Sniff animation - caught something big!
     Avatar::sniff();
+    
+    // Cute jump celebration!
+    Avatar::cuteJump();
     
     // Phase 2: Attack shake - strong shake for captures!
     Avatar::setAttackShake(true, true);
@@ -899,10 +917,8 @@ void Mood::onHandshakeCaptured(const char* apName) {
     lastPhraseChange = millis();
     queuePhrases(buf2, buf3);
     
-    // Celebratory beep for handshake capture (higher pitch than deauth)
-    if (Config::personality().soundEnabled) {
-        M5.Speaker.tone(1500, 150);  // Distinctive handshake beep
-    }
+    // Celebratory beep for handshake capture - non-blocking via SFX engine
+    SFX::play(SFX::HANDSHAKE);
     
     // Force mood peek to show EXCITED face regardless of threshold
     forceMoodPeek();
@@ -915,6 +931,9 @@ void Mood::onPMKIDCaptured(const char* apName) {
     
     // Sniff animation - stealthy capture!
     Avatar::sniff();
+    
+    // Cute jump celebration!
+    Avatar::cuteJump();
     
     // Phase 2: Attack shake - strong shake for captures!
     Avatar::setAttackShake(true, true);
@@ -967,17 +986,11 @@ void Mood::onPMKIDCaptured(const char* apName) {
     lastPhraseChange = millis();
     queuePhrases(buf2, buf3);
     
-    // Triple beep for PMKID - it's special!
-    if (Config::personality().soundEnabled) {
-        M5.Speaker.tone(1800, 100);
-        delay(120);
-        M5.Speaker.tone(2000, 100);
-        delay(120);
-        M5.Speaker.tone(2200, 150);
-    }
+    // Triple beep for PMKID - non-blocking via SFX engine
+    SFX::play(SFX::PMKID);
     
-    // Auto-save the PMKID
-    OinkMode::saveAllPMKIDs();
+    // NOTE: saveAllPMKIDs() removed from here - OinkMode handles its own saves
+    // Calling SD writes during promiscuous mode causes SPI bus contention crashes
     
     // Force mood peek to show EXCITED face regardless of threshold
     forceMoodPeek();
@@ -988,6 +1001,9 @@ void Mood::onNewNetwork(const char* apName, int8_t rssi, uint8_t channel) {
     applyMomentumBoost(10);  // Quick excitement for network find
     lastActivityTime = millis();
     isBoredState = false;  // Clear bored state - found something!
+    
+    // Audio feedback - soft blip for new network
+    SFX::play(SFX::NETWORK_NEW);
     
     // Sniff animation - found a truffle!
     Avatar::sniff();
@@ -1039,8 +1055,14 @@ void Mood::onNewNetwork(const char* apName, int8_t rssi, uint8_t channel) {
 }
 
 void Mood::setStatusMessage(const String& msg) {
+    uint32_t now = millis();
+    if (msg == lastStatusMessage && (now - lastStatusMessageTime) < 1000) {
+        return;
+    }
+    lastStatusMessage = msg;
+    lastStatusMessageTime = now;
     currentPhrase = msg;
-    lastPhraseChange = millis();
+    lastPhraseChange = now;
 }
 
 void Mood::onMLPrediction(float confidence) {
@@ -1498,24 +1520,38 @@ void Mood::updateAvatarState() {
 }
 
 void Mood::draw(M5Canvas& canvas) {
+    // === WEATHER SYSTEM ===
+    // Weather update is handled in Display::update() to avoid stuck flashes in non-avatar screens.
+    int effectiveMood = getEffectiveHappiness();
+    
+    // Note: Background inversion for thunder is handled at Display level
+    // before Avatar::draw() is called. We don't fillSprite here as it would
+    // erase the already-drawn avatar.
+    
     // Hide bubble during walk transition
     if (Avatar::isTransitioning()) {
         return;  // Pig is walking, no speech bubble
     }
     
-    // Calculate bubble size based on ACTUAL word-wrapped line count
-    // Optimized: 16 chars/line (fits 99px text area), 5 lines max (down to grass at y=73)
+    // Calculate bubble size based on ACTUAL word-wrapped content
+    // Dynamic width: fits content tightly, min 50px, max 116px
     String phrase = currentPhrase;
     phrase.toUpperCase();  // UPPERCASE for visibility
-    int maxCharsPerLine = 16;  // Fits within available width
+    int maxCharsPerLine = 16;  // Max chars before wrap
     
-    // First pass: simulate word wrap to count actual lines needed
+    // First pass: simulate word wrap, count lines AND track longest line
     int numLines = 0;
+    int longestLineChars = 0;
     String simRemaining = phrase;
+    
     while (simRemaining.length() > 0 && numLines < 5) {
+        int lineLen;
         if ((int)simRemaining.length() <= maxCharsPerLine) {
+            // Last line - use remaining length
+            lineLen = simRemaining.length();
             simRemaining = "";
         } else {
+            // Find word break point
             int splitPos = simRemaining.lastIndexOf(' ', maxCharsPerLine);
             if (splitPos < 1) {
                 splitPos = simRemaining.indexOf(' ', maxCharsPerLine);
@@ -1523,83 +1559,138 @@ void Mood::draw(M5Canvas& canvas) {
                     splitPos = maxCharsPerLine;
                 }
             }
+            lineLen = splitPos;
             simRemaining = (splitPos < (int)simRemaining.length()) ? simRemaining.substring(splitPos + 1) : "";
+        }
+        
+        // Track longest line for dynamic width
+        if (lineLen > longestLineChars) {
+            longestLineChars = lineLen;
         }
         numLines++;
     }
-    if (numLines == 0) numLines = 1;  // At least 1 line
+    if (numLines == 0) numLines = 1;
+    if (longestLineChars == 0) longestLineChars = 1;
     
-    // Phase 3: Context-aware 3-mode bubble positioning based on pig X position
-    // Mode 1 (LEFT): pigX < 30  → bubble right (X=120), arrow left
-    // Mode 2 (CENTER): 30 <= pigX <= 102 → bubble center-top (X=62), arrow down
-    // Mode 3 (RIGHT): pigX > 102 → bubble left (X=4), arrow right
+    // === DYNAMIC BUBBLE WIDTH ===
+    // Width based on longest line: chars * 6px + padding (10px)
+    // Clamped between 50px (min) and 116px (max)
+    const int MIN_BUBBLE_W = 50;
+    const int MAX_BUBBLE_W = 116;
+    int bubbleW = constrain(longestLineChars * 6 + 12, MIN_BUBBLE_W, MAX_BUBBLE_W);
+    
+    // === ADAPTIVE BUBBLE POSITIONING (Sirloin-style) ===
+    // Bubble follows pig's head position and avoids covering the face
+    // 3 modes: LEFT_EDGE (horizontal arrow right), CENTER (vertical arrow down), RIGHT_EDGE (horizontal arrow left)
+    
     int pigX = Avatar::getCurrentX();
+    bool pigFacingRight = Avatar::isFacingRight();
     
-    int bubbleW = 116;  // Fixed bubble width
+    // Calculate pig's head center based on facing direction
+    // Pig head is 6 chars at text size 3 (18px/char = 108px total width)
+    int pigHeadCenterX = pigX + 54;  // Center of pig face
+    
     int bubbleX, bubbleY;
     int lineHeight = 11;
     int bubbleH = 8 + (numLines * lineHeight);  // Padding + actual lines
     
-    // Cap bubble height to fit above grass (y=73)
-    if (bubbleH > 70) bubbleH = 70;
+    // Cap bubble height to fit above grass (y=91)
+    if (bubbleH > 88) bubbleH = 88;
     
-    // Determine bubble mode based on pigX thresholds
-    enum class BubbleMode { LEFT_SIDE, CENTER_TOP, RIGHT_SIDE };
+    // Determine bubble mode based on pigX thresholds (matches Sirloin)
+    enum class BubbleMode { LEFT_EDGE, CENTER_TOP, RIGHT_EDGE };
     BubbleMode mode;
     
-    if (pigX < 30) {
-        mode = BubbleMode::LEFT_SIDE;  // Pig on left edge → bubble on right
-        bubbleX = 120;
-        bubbleY = 3;  // Edge position: Y=3
-    } else if (pigX > 102) {
-        mode = BubbleMode::RIGHT_SIDE;  // Pig on right edge → bubble on left
-        bubbleX = 4;
-        bubbleY = 3;  // Edge position: Y=3
+    bool atLeftEdge = (pigX < 35);
+    bool atRightEdge = (pigX > 90);  // 240 - 108 (pig width) - margin
+    
+    // Arrow positioning constants
+    const int ARROW_LENGTH = 8;
+    
+    if (atLeftEdge) {
+        // Pig at left edge → bubble floats to RIGHT of pig (horizontal arrow pointing left)
+        mode = BubbleMode::LEFT_EDGE;
+        bubbleX = pigX + 108 + 6;  // Right of pig body + 6px gap
+        bubbleY = 23;  // At pig ear level
+    } else if (atRightEdge) {
+        // Pig at right edge → bubble floats to LEFT of pig (horizontal arrow pointing right)
+        mode = BubbleMode::RIGHT_EDGE;
+        bubbleX = pigX - bubbleW - 6;  // Left of pig + 6px gap
+        bubbleY = 23;  // At pig ear level
     } else {
-        mode = BubbleMode::CENTER_TOP;  // Pig in center → bubble centered above
-        bubbleX = 62;  // Centered on 240px screen
-        bubbleY = 2;   // Center position: Y=2 (tighter fit)
+        // Pig in center → bubble floats ABOVE pig but not too far
+        // Position bubble so it doesn't cover pig's face but stays close
+        mode = BubbleMode::CENTER_TOP;
+        bubbleX = pigHeadCenterX - (bubbleW / 2);  // Center over pig's head
+        
+        // Pig head at Y=23, ears start there
+        // Arrow tip should point at pig's ear area (Y ~20)
+        // Bubble should not float too far from head - min Y = 2 (near top)
+        int arrowTipY = 20;  // Point at pig's ear area
+        int bubbleBottom = arrowTipY - ARROW_LENGTH;  // Y = 12
+        bubbleY = bubbleBottom - bubbleH;
+        
+        // Clamp bubbleY to minimum of 2 (near top) - taller bubbles stay close to head
+        if (bubbleY < 2) bubbleY = 2;
     }
     
-    // Draw filled bubble with pink background
+    // Clamp bubble to screen edges (prevent overflow)
+    if (bubbleX < 2) bubbleX = 2;
+    if (bubbleX + bubbleW > 238) bubbleX = 238 - bubbleW;
+    
+    // === DRAW BUBBLE ===
+    // For CENTER_TOP mode with negative Y, draw to both topBar and mainCanvas
+    bool drawToTopBar = (mode == BubbleMode::CENTER_TOP && bubbleY < 0);
+    
+    if (drawToTopBar) {
+        // Get topBar canvas and draw bubble there too
+        M5Canvas& topBar = Display::getTopBar();
+        
+        // Convert mainCanvas Y to topBar Y (physical coordinates)
+        // mainCanvas Y=0 is physical Y=TOP_BAR_H (14)
+        // topBar Y=0 is physical Y=0
+        // So mainCanvas bubbleY maps to topBar Y = TOP_BAR_H + bubbleY
+        int topBarBubbleY = TOP_BAR_H + bubbleY;
+        
+        // Draw bubble to topBar (portion above mainCanvas)
+        topBar.fillRoundRect(bubbleX, topBarBubbleY, bubbleW, bubbleH, 6, COLOR_FG);
+    }
+    
+    // Draw bubble to mainCanvas (negative Y portion will be clipped)
     canvas.fillRoundRect(bubbleX, bubbleY, bubbleW, bubbleH, 6, COLOR_FG);
     
-    // Draw filled triangle arrow pointing to piglet (comic-style speech bubble tail)
-    if (mode == BubbleMode::LEFT_SIDE) {
-        // Pig on left, bubble on right, arrow points LEFT toward pig
-        int arrowTipY = bubbleY + bubbleH / 2;
-        int arrowTopY = arrowTipY - 5;
-        int arrowBottomY = arrowTipY + 5;
-        int arrowTipX = bubbleX - 8;
+    // === DRAW ARROW ===
+    if (mode == BubbleMode::LEFT_EDGE) {
+        // Pig on left, bubble on right → horizontal arrow pointing LEFT toward pig
+        int arrowY = bubbleY + (bubbleH / 2);  // Middle of bubble vertically
+        int arrowTipX = bubbleX - ARROW_LENGTH;
         int arrowBaseX = bubbleX;
-        canvas.fillTriangle(arrowTipX, arrowTipY, arrowBaseX, arrowTopY, arrowBaseX, arrowBottomY, COLOR_FG);
-    } else if (mode == BubbleMode::RIGHT_SIDE) {
-        // Pig on right, bubble on left, arrow points RIGHT toward pig
-        int arrowTipY = bubbleY + bubbleH / 2;
-        int arrowTopY = arrowTipY - 5;
-        int arrowBottomY = arrowTipY + 5;
-        int arrowTipX = bubbleX + bubbleW + 8;
+        canvas.fillTriangle(arrowTipX, arrowY, arrowBaseX, arrowY - 6, arrowBaseX, arrowY + 6, COLOR_FG);
+    } else if (mode == BubbleMode::RIGHT_EDGE) {
+        // Pig on right, bubble on left → horizontal arrow pointing RIGHT toward pig
+        int arrowY = bubbleY + (bubbleH / 2);
+        int arrowTipX = bubbleX + bubbleW + ARROW_LENGTH;
         int arrowBaseX = bubbleX + bubbleW;
-        canvas.fillTriangle(arrowTipX, arrowTipY, arrowBaseX, arrowTopY, arrowBaseX, arrowBottomY, COLOR_FG);
+        canvas.fillTriangle(arrowTipX, arrowY, arrowBaseX, arrowY - 6, arrowBaseX, arrowY + 6, COLOR_FG);
     } else {
-        // Center mode: arrow points DOWN toward pig (below bubble)
-        int arrowTipX = bubbleX + bubbleW / 2;
-        int arrowTipY = bubbleY + bubbleH + 8;
-        int arrowLeftX = arrowTipX - 5;
-        int arrowRightX = arrowTipX + 5;
-        int arrowBaseY = bubbleY + bubbleH;
-        canvas.fillTriangle(arrowTipX, arrowTipY, arrowLeftX, arrowBaseY, arrowRightX, arrowBaseY, COLOR_FG);
+        // Center mode → vertical arrow pointing DOWN toward pig's head
+        int arrowTipY = 20;  // Point at pig's ear area (updated for new head Y)
+        int arrowBaseY = arrowTipY - ARROW_LENGTH;
+        int arrowLeftX = pigHeadCenterX - 6;
+        int arrowRightX = pigHeadCenterX + 6;
+        
+        // Clamp arrow base to bubble width
+        if (arrowLeftX < bubbleX + 2) arrowLeftX = bubbleX + 2;
+        if (arrowRightX > bubbleX + bubbleW - 2) arrowRightX = bubbleX + bubbleW - 2;
+        
+        canvas.fillTriangle(pigHeadCenterX, arrowTipY, arrowLeftX, arrowBaseY, arrowRightX, arrowBaseY, COLOR_FG);
     }
     
-    // Draw phrase inside bubble with word wrapping - BLACK text on pink
-    canvas.setTextSize(1);
-    canvas.setTextDatum(top_left);
-    canvas.setTextColor(COLOR_BG);  // Black text
-    
+    // === DRAW TEXT ===
     int textX = bubbleX + 5;
     int textY = bubbleY + 4;
     
-    // Second pass: actually render the text
+    // Second pass: actually render the text with word wrapping
     String remaining = phrase;
     int lineNum = 0;
     while (remaining.length() > 0 && lineNum < 5) {
@@ -1608,20 +1699,35 @@ void Mood::draw(M5Canvas& canvas) {
             line = remaining;
             remaining = "";
         } else {
-            // Try to find space before limit (but not at position 0)
             int splitPos = remaining.lastIndexOf(' ', maxCharsPerLine);
             if (splitPos < 1) {
-                // No usable space before limit - search forward for next space
                 splitPos = remaining.indexOf(' ', maxCharsPerLine);
-                if (splitPos < 0) {
-                    // No space at all - hard break at limit
-                    splitPos = maxCharsPerLine;
-                }
+                if (splitPos < 0) splitPos = maxCharsPerLine;
             }
             line = remaining.substring(0, splitPos);
             remaining = (splitPos < (int)remaining.length()) ? remaining.substring(splitPos + 1) : "";
         }
-        canvas.drawString(line, textX, textY + lineNum * lineHeight);
+        
+        int lineY = textY + lineNum * lineHeight;
+        
+        // Draw text to topBar if it falls in that area
+        if (drawToTopBar && lineY < 0) {
+            M5Canvas& topBar = Display::getTopBar();
+            topBar.setTextSize(1);
+            topBar.setTextDatum(top_left);
+            topBar.setTextColor(COLOR_BG);
+            int topBarLineY = TOP_BAR_H + lineY;
+            if (topBarLineY >= 0 && topBarLineY < TOP_BAR_H) {
+                topBar.drawString(line, textX, topBarLineY);
+            }
+        }
+        
+        // Draw text to mainCanvas (negative Y will be clipped)
+        canvas.setTextSize(1);
+        canvas.setTextDatum(top_left);
+        canvas.setTextColor(COLOR_BG);
+        canvas.drawString(line, textX, lineY);
+        
         lineNum++;
     }
 }
@@ -1763,10 +1869,8 @@ void Mood::onDeauthSuccess(const uint8_t* clientMac) {
     currentPhrase = buf;
     lastPhraseChange = millis();
     
-    // Quick beep for confirmed kick
-    if (Config::personality().soundEnabled) {
-        M5.Speaker.tone(800, 50);
-    }
+    // Quick beep for confirmed kick - non-blocking
+    SFX::play(SFX::DEAUTH);
     
     // Force mood peek to show emotional reaction
     forceMoodPeek();
@@ -1823,8 +1927,7 @@ void Mood::onWarhogFound(const char* apName, uint8_t channel) {
     // Sniff animation - found a truffle!
     Avatar::sniff();
     
-    // Award XP for WARHOG network logged with GPS
-    XP::addXP(XPEvent::WARHOG_LOGGED);
+    // XP awarded in warhog.cpp when network is logged (authoritative source)
     
     int idx = pickPhraseIdx(PhraseCategory::WARHOG_FOUND, sizeof(PHRASES_WARHOG_FOUND) / sizeof(PHRASES_WARHOG_FOUND[0]));
     currentPhrase = PHRASES_WARHOG_FOUND[idx];
@@ -1885,4 +1988,3 @@ void Mood::onPiggyBluesUpdate(const char* vendor, int8_t rssi, uint8_t targetCou
     }
     lastPhraseChange = millis();
 }
-

@@ -24,6 +24,7 @@ public:
     // API operations (require WiFi connection)
     static bool fetchResults();                      // GET cracked passwords, cache to SD
     static bool uploadCapture(const char* pcapPath); // POST pcap file to WPA-SEC
+    static bool isBusy();
     
     // Local cache queries (no WiFi needed)
     static bool loadCache();                         // Load cache from SD
@@ -34,16 +35,34 @@ public:
     
     // Upload tracking
     static bool isUploaded(const char* bssid);       // Check if already uploaded
-    static void markUploaded(const char* bssid);     // Mark as uploaded
+    /**
+     * Mark a BSSID as uploaded.  This function does not reload the
+     * entire cache (which would allocate a large amount of heap).  It
+     * updates the in-memory uploaded map only if the cache is already
+     * loaded, and then appends the entry to the uploaded list file on
+     * SD.  This ensures that uploads are remembered across sessions
+     * without requiring the full cache to be present in memory.
+     */
+    static void markUploaded(const char* bssid);
     
     // Status
     static const char* getLastError();
     static const char* getStatus();
+
+    /**
+     * @brief Free cached WPA‑SEC results from memory.
+     *
+     * This releases the internal cracked and uploaded maps to return heap
+     * space prior to large TLS operations.  After calling this, the cache
+     * will be reloaded from disk on the next lookup or fetch.
+     */
+    static void freeCacheMemory();
     
 private:
     static bool cacheLoaded;
     static char lastError[64];
     static char statusMessage[64];
+    static bool busy;
     
     // Cache: BSSID (no colons, uppercase) -> {ssid, password}
     struct CacheEntry {

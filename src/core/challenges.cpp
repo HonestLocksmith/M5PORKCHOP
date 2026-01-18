@@ -4,6 +4,7 @@
 #include "challenges.h"
 #include "config.h"
 #include "../ui/display.h"
+#include "../audio/sfx.h"
 #include <M5Unified.h>
 
 // porkchop global instance lives in main.cpp
@@ -16,7 +17,7 @@ bool Challenges::sessionDeauthed = false;
 
 // ============================================================
 // CHALLENGE TEMPLATE POOL
-// the pig's menu of demands. 12 options, 3 chosen per session.
+// the pig's menu of demands. 18 options, 3 chosen per session.
 // ============================================================
 
 struct ChallengeTemplate {
@@ -26,23 +27,31 @@ struct ChallengeTemplate {
     uint8_t hardMult;        // multiplier for HARD (4-6x)
     const char* nameFormat;  // printf format with %d for target
     uint8_t xpRewardBase;    // base XP reward (scaled by difficulty)
+    bool requiresGPS;        // only available when GPS enabled
 };
 
 // pig's demands are varied but fair (mostly)
+// NOTE: name format must be <=18 chars after %d substitution for UI fit
 static const ChallengeTemplate CHALLENGE_POOL[] = {
-    // type               easy  med  hard  name format                xp
-    { ChallengeType::NETWORKS_FOUND,    25,   2,    4,  "sniff %d networks",       15 },
-    { ChallengeType::NETWORKS_FOUND,    50,   2,    3,  "discover %d APs",         25 },
-    { ChallengeType::HIDDEN_FOUND,       2,   2,    3,  "find %d hidden nets",     20 },
-    { ChallengeType::HANDSHAKES,         1,   2,    4,  "capture %d handshakes",   40 },
-    { ChallengeType::PMKIDS,             1,   2,    3,  "grab %d PMKIDs",          50 },
-    { ChallengeType::DEAUTHS,            5,   3,    5,  "land %d deauths",         10 },
-    { ChallengeType::GPS_NETWORKS,      15,   2,    4,  "tag %d GPS networks",     20 },
-    { ChallengeType::BLE_PACKETS,       50,   3,    5,  "spam %d BLE packets",     15 },
-    { ChallengeType::PASSIVE_NETWORKS,  20,   2,    3,  "observe %d silently",     25 },
-    { ChallengeType::NO_DEAUTH_STREAK,  15,   2,    3,  "%d nets zero violence",   30 },
-    { ChallengeType::DISTANCE_M,       500,   2,    4,  "walk %dm wardriving",     20 },
-    { ChallengeType::WPA3_FOUND,         1,   2,    4,  "spot %d WPA3 nets",       15 },
+    // type                              easy  med  hard  name format                xp   gps?
+    { ChallengeType::NETWORKS_FOUND,      25,   2,    4,  "inhale %d nets",          15, false },
+    { ChallengeType::NETWORKS_FOUND,      50,   2,    3,  "discover %d APs",         25, false },
+    { ChallengeType::HIDDEN_FOUND,         2,   2,    3,  "expose %d hidden",        20, false },
+    { ChallengeType::HANDSHAKES,           1,   2,    4,  "snatch %d shakes",        40, false },
+    { ChallengeType::HANDSHAKES,           2,   2,    3,  "pwn %d targets",          50, false },
+    { ChallengeType::PMKIDS,               1,   2,    3,  "swipe %d PMKIDs",         50, false },
+    { ChallengeType::DEAUTHS,              5,   3,    5,  "drop %d deauths",         10, false },
+    { ChallengeType::DEAUTHS,             10,   2,    4,  "evict %d peasants",       15, false },
+    { ChallengeType::GPS_NETWORKS,        15,   2,    4,  "tag %d GPS nets",         20,  true },
+    { ChallengeType::GPS_NETWORKS,        30,   2,    3,  "geotag %d signals",       25,  true },
+    { ChallengeType::BLE_PACKETS,         50,   3,    5,  "spam %d BLE pkts",        15, false },
+    { ChallengeType::BLE_PACKETS,        150,   2,    3,  "serve %d BLE",            20, false },
+    { ChallengeType::PASSIVE_NETWORKS,    20,   2,    3,  "lurk %d silently",        25, false },
+    { ChallengeType::NO_DEAUTH_STREAK,    15,   2,    3,  "%d nets no deauth",       30, false },
+    { ChallengeType::DISTANCE_M,         500,   2,    4,  "trot %dm hunting",        20,  true },
+    { ChallengeType::DISTANCE_M,        1000,   2,    3,  "stomp %dm total",         25,  true },
+    { ChallengeType::WPA3_FOUND,           1,   2,    4,  "spot %d WPA3 nets",       15, false },
+    { ChallengeType::OPEN_FOUND,           3,   2,    3,  "find %d open nets",       15, false },
 };
 static const uint8_t POOL_SIZE = sizeof(CHALLENGE_POOL) / sizeof(CHALLENGE_POOL[0]);
 
@@ -71,26 +80,55 @@ void Challenges::generate() {
     activeCount = 3;
     sessionDeauthed = false;
     
-    // pick 3 different templates (no repeats - pig has variety)
+    bool gpsEnabled = Config::gps().enabled;
+    
+    // pick 3 different templates (no repeats, no duplicate types)
     uint8_t picked[3] = {0xFF, 0xFF, 0xFF};
+    ChallengeType pickedTypes[3] = {};
     
     for (int i = 0; i < 3; i++) {
         uint8_t idx;
-        bool unique;
+        bool valid;
+        int attempts = 0;
+        const int maxAttempts = 50;  // prevent infinite loop
         
-        // keep rolling until we get a unique template
+        // keep rolling until we get a valid unique template
         do {
             idx = random(0, POOL_SIZE);
-            unique = true;
+            valid = true;
+            
+            const ChallengeTemplate& candidate = CHALLENGE_POOL[idx];
+            
+            // Skip GPS-required challenges if GPS disabled
+            if (candidate.requiresGPS && !gpsEnabled) {
+                valid = false;
+                attempts++;
+                continue;
+            }
+            
+            // Check for duplicate template index
             for (int j = 0; j < i; j++) {
                 if (picked[j] == idx) {
-                    unique = false;
+                    valid = false;
                     break;
                 }
             }
-        } while (!unique);
+            
+            // Check for duplicate ChallengeType (pig wants variety!)
+            if (valid) {
+                for (int j = 0; j < i; j++) {
+                    if (pickedTypes[j] == candidate.type) {
+                        valid = false;
+                        break;
+                    }
+                }
+            }
+            
+            attempts++;
+        } while (!valid && attempts < maxAttempts);
         
         picked[i] = idx;
+        pickedTypes[i] = CHALLENGE_POOL[idx].type;
         
         // difficulty scales with slot: 0=EASY, 1=MEDIUM, 2=HARD
         ChallengeDifficulty diff = static_cast<ChallengeDifficulty>(i);
@@ -210,8 +248,8 @@ void Challenges::updateProgress(ChallengeType type, uint16_t delta) {
             ch.completed = true;
             ch.progress = ch.target;  // cap at target for display
             
-            // reward the peasant (direct XP add - bypasses event to avoid recursion)
-            XP::addXP(ch.xpReward);
+            // reward the peasant (silent add - challenge toast/sound is the celebration)
+            XP::addXPSilent(ch.xpReward);
             
             // pig is pleased. announce it.
             char toast[48];
@@ -225,17 +263,8 @@ void Challenges::updateProgress(ChallengeType type, uint16_t delta) {
             }
             Display::showToast(toastMsg);
             
-            // distinct jingle for challenge complete
-            // rising tones: accomplishment achieved
-            if (Config::personality().soundEnabled) {
-                M5.Speaker.tone(700, 60);
-                delay(80);
-                M5.Speaker.tone(900, 60);
-                delay(80);
-                M5.Speaker.tone(1100, 100);
-            }
-            
-            delay(400);  // let user see the toast
+            // Rising tones for challenge complete - non-blocking
+            SFX::play(SFX::CHALLENGE_COMPLETE);
             
             Serial.printf("[CHALLENGES] pig pleased. '%s' complete. +%d XP.\\n",
                           ch.name, ch.xpReward);
@@ -244,23 +273,12 @@ void Challenges::updateProgress(ChallengeType type, uint16_t delta) {
             if (allCompleted()) {
                 // TRIPLE THREAT BONUS - pig respects dedication
                 const uint16_t BONUS_XP = 100;
-                XP::addXP(BONUS_XP);
+                XP::addXPSilent(BONUS_XP);  // Silent add - sweep fanfare is the celebration
                 
                 Display::showToast("WORTHY. 115200 REMEMBERS.");
                 
-                // Victory fanfare - triumphant jingle
-                if (Config::personality().soundEnabled) {
-                    delay(200);
-                    M5.Speaker.tone(800, 80);
-                    delay(100);
-                    M5.Speaker.tone(1000, 80);
-                    delay(100);
-                    M5.Speaker.tone(1200, 80);
-                    delay(100);
-                    M5.Speaker.tone(1500, 200);
-                }
-                
-                delay(500);
+                // Victory fanfare - non-blocking (priority sound, interrupts CHALLENGE_COMPLETE)
+                SFX::play(SFX::CHALLENGE_SWEEP);
                 
                 Serial.println("[CHALLENGES] *** FULL SWEEP! +100 BONUS XP ***");
             }

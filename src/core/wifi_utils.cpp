@@ -7,6 +7,7 @@
 #include <esp_heap_caps.h>
 #include <time.h>
 #include <NimBLEDevice.h>  // For BLE deinit during heap conditioning
+#include "heap_health.h"
 
 namespace WiFiUtils {
 
@@ -403,7 +404,67 @@ size_t conditionHeapForTLS() {
     
     Serial.printf("[HEAP] Conditioning complete: free=%u (%+d) largest=%u (%+d)\n",
                   finalFree, freedBytes, finalLargest, contiguousGain);
-    
+    HeapHealth::resetPeaks(true);
+    return finalLargest;
+}
+
+size_t brewHeap(uint32_t dwellMs, bool includeBleCleanup) {
+    size_t initialLargest = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+    size_t initialFree = ESP.getFreeHeap();
+    Serial.printf("[HEAP] Brew start: free=%u largest=%u dwell=%ums\n",
+                  initialFree, initialLargest, (unsigned)dwellMs);
+
+    if (includeBleCleanup && NimBLEDevice::isInitialized()) {
+        Serial.println("[HEAP] Brew: BLE active - deinitializing");
+        NimBLEScan* pScan = NimBLEDevice::getScan();
+        if (pScan && pScan->isScanning()) {
+            pScan->stop();
+            delay(50);
+        }
+        NimBLEAdvertising* pAdv = NimBLEDevice::getAdvertising();
+        if (pAdv && pAdv->isAdvertising()) {
+            pAdv->stop();
+            delay(50);
+        }
+        NimBLEDevice::deinit(true);
+        delay(100);
+    }
+
+    brewPacketCount = 0;
+    WiFi.persistent(false);
+    WiFi.setSleep(false);
+    WiFi.mode(WIFI_STA);
+    delay(50);
+
+    WiFi.disconnect();
+    delay(50);
+    esp_wifi_set_promiscuous_rx_cb(brewPromiscuousCallback);
+    esp_wifi_set_promiscuous_filter(nullptr);
+    esp_wifi_set_promiscuous(true);
+    esp_wifi_set_channel(1, WIFI_SECOND_CHAN_NONE);
+
+    const uint8_t channels[] = {1, 6, 11, 2, 7, 12, 3, 8, 13, 4, 9, 5, 10};
+    uint32_t steps = dwellMs / 100;
+    if (steps < 1) steps = 1;
+    for (uint32_t i = 0; i < steps; i++) {
+        esp_wifi_set_channel(channels[i % 13], WIFI_SECOND_CHAN_NONE);
+        delay(100);
+        yield();
+    }
+
+    esp_wifi_set_promiscuous(false);
+    esp_wifi_set_promiscuous_rx_cb(nullptr);
+    WiFi.disconnect(false, true);
+    WiFi.mode(WIFI_STA);
+    delay(80);
+
+    size_t finalLargest = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+    size_t finalFree = ESP.getFreeHeap();
+    Serial.printf("[HEAP] Brew complete: free=%u (%+d) largest=%u (%+d) pkts=%u\n",
+                  finalFree, (int)(finalFree - initialFree),
+                  finalLargest, (int)(finalLargest - initialLargest),
+                  brewPacketCount);
+    HeapHealth::resetPeaks(true);
     return finalLargest;
 }
 

@@ -27,7 +27,6 @@
 #include "../modes/bacon.h"
 #include "../gps/gps.h"
 #include "../web/fileserver.h"
-#include "../core/heap_policy.h"
 #include "menu.h"
 #include "settings_menu.h"
 #include "captures_menu.h"
@@ -41,6 +40,7 @@
 #include "unlockables_menu.h"
 #include "bounty_status_menu.h"
 #include "sd_format_menu.h"
+#include "../core/heap_health.h"
 
 // Theme color getters - read from config
 // Theme definitions
@@ -96,93 +96,11 @@ static void getSystemTimeString(char* out, size_t len) {
 
 static portMUX_TYPE displayMux = portMUX_INITIALIZER_UNLOCKED;
 
-// Heap health tracking (rate-limited)
-static uint8_t heapHealthPct = 100;
-static uint32_t lastHeapHealthSampleMs = 0;
-static uint32_t heapHealthToastStartMs = 0;
-static uint32_t lastHeapHealthToastMs = 0;
-static uint8_t heapHealthToastDelta = 0;
-static bool heapHealthToastImproved = false;
-static bool heapHealthToastActive = false;
-static size_t heapHealthPeakFree = 0;
-static size_t heapHealthPeakLargest = 0;
-static const uint32_t HEAP_HEALTH_SAMPLE_MS = 1000;
-static const uint32_t HEAP_HEALTH_TOAST_MS = 5000;  // Match XP top bar duration
-static const uint8_t HEAP_HEALTH_TOAST_MIN_DELTA = 5;
-
 static void drawHeartIcon(M5Canvas& canvas, int x, int y, uint16_t color) {
     // Upright heart built from two circles + triangle
     canvas.fillCircle(x + 2, y + 2, 2, color);
     canvas.fillCircle(x + 6, y + 2, 2, color);
     canvas.fillTriangle(x, y + 3, x + 8, y + 3, x + 4, y + 6, color);
-}
-
-static uint8_t computeHeapHealthPercent(size_t freeHeap, size_t largestBlock, bool updatePeaks) {
-    if (updatePeaks) {
-        if (freeHeap > heapHealthPeakFree) heapHealthPeakFree = freeHeap;
-        if (largestBlock > heapHealthPeakLargest) heapHealthPeakLargest = largestBlock;
-    }
-
-    float freeNorm = heapHealthPeakFree > 0 ? (float)freeHeap / (float)heapHealthPeakFree : 0.0f;
-    float contigNorm = heapHealthPeakLargest > 0 ? (float)largestBlock / (float)heapHealthPeakLargest : 0.0f;
-    float thresholdNorm = 1.0f;
-    if (HeapPolicy::kMinHeapForTls > 0 && HeapPolicy::kMinContigForTls > 0) {
-        float freeGate = (float)freeHeap / (float)HeapPolicy::kMinHeapForTls;
-        float contigGate = (float)largestBlock / (float)HeapPolicy::kMinContigForTls;
-        thresholdNorm = (freeGate < contigGate) ? freeGate : contigGate;
-    }
-
-    float health = freeNorm < contigNorm ? freeNorm : contigNorm;
-    if (thresholdNorm < health) health = thresholdNorm;
-
-    float fragRatio = freeHeap > 0 ? (float)largestBlock / (float)freeHeap : 0.0f;
-    float fragPenalty = fragRatio / 0.60f;  // Penalize fragmentation when largest << total free
-    if (fragPenalty < 0.0f) fragPenalty = 0.0f;
-    if (fragPenalty > 1.0f) fragPenalty = 1.0f;
-    health *= fragPenalty;
-
-    if (health < 0.0f) health = 0.0f;
-    if (health > 1.0f) health = 1.0f;
-
-    int pct = (int)(health * 100.0f + 0.5f);
-    if (pct < 0) pct = 0;
-    if (pct > 100) pct = 100;
-    return (uint8_t)pct;
-}
-
-static void updateHeapHealthState() {
-    uint32_t now = millis();
-    if (now - lastHeapHealthSampleMs < HEAP_HEALTH_SAMPLE_MS) {
-        return;
-    }
-    lastHeapHealthSampleMs = now;
-
-    size_t freeHeap = ESP.getFreeHeap();
-    size_t largestBlock = ESP.getMaxAllocHeap();
-    uint8_t newPct = computeHeapHealthPercent(freeHeap, largestBlock, true);
-
-    int delta = (int)newPct - (int)heapHealthPct;
-    uint8_t deltaAbs = (delta < 0) ? (uint8_t)(-delta) : (uint8_t)delta;
-    heapHealthPct = newPct;
-
-    if (delta != 0 && deltaAbs >= HEAP_HEALTH_TOAST_MIN_DELTA) {
-        if (now - lastHeapHealthToastMs >= HEAP_HEALTH_TOAST_MS) {
-            heapHealthToastDelta = deltaAbs;
-            heapHealthToastImproved = delta > 0;
-            heapHealthToastActive = true;
-            heapHealthToastStartMs = now;
-            lastHeapHealthToastMs = now;
-        }
-    }
-}
-
-static bool shouldShowHeapHealthNotification() {
-    if (!heapHealthToastActive) return false;
-    if (millis() - heapHealthToastStartMs >= HEAP_HEALTH_TOAST_MS) {
-        heapHealthToastActive = false;
-        return false;
-    }
-    return true;
 }
 
 static void drawTopBarHeapHealth(M5Canvas& topBar) {
@@ -196,9 +114,10 @@ static void drawTopBarHeapHealth(M5Canvas& topBar) {
     snprintf(levelStr, sizeof(levelStr), "L%d", XP::getLevel());
     const char* title = XP::getTitle();
 
-    const char* status = heapHealthToastImproved ? "HEALTH IMPROVED" : "HEALTH DROPPED";
+    const char* status = HeapHealth::isToastImproved() ? "HEALTH IMPROVED" : "HEALTH DROPPED";
     char msgBuf[48];
-    snprintf(msgBuf, sizeof(msgBuf), "%s %c%u%%", status, heapHealthToastImproved ? '+' : '-', heapHealthToastDelta);
+    snprintf(msgBuf, sizeof(msgBuf), "%s %c%u%%", status,
+             HeapHealth::isToastImproved() ? '+' : '-', HeapHealth::getToastDelta());
 
     int levelW = topBar.textWidth(levelStr);
     int titleX = 2 + levelW + 4;
@@ -339,7 +258,7 @@ void Display::update() {
     }
 
     // Update heap health state (rate-limited)
-    updateHeapHealthState();
+    HeapHealth::update();
 
     // Check for screen dimming
     updateDimming();
@@ -570,7 +489,7 @@ void Display::drawTopBar() {
     }
 
     // Check for heap health notification (same style as XP)
-    if (shouldShowHeapHealthNotification()) {
+    if (HeapHealth::shouldShowToast()) {
         drawTopBarHeapHealth(topBar);
         return;
     }
@@ -1009,7 +928,7 @@ void Display::drawBottomBar() {
 
     // Center: Heap health bar (XP-style, inverted)
     if (showHealthBar) {
-        int pct = heapHealthPct;
+        int pct = HeapHealth::getPercent();
 
         const int barW = 80;
         const int barH = 6;

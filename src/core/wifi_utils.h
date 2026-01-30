@@ -73,4 +73,12 @@ namespace WiFiUtils {
      * @return Size of largest contiguous block after conditioning
      */
     size_t conditionHeapForTLS();
+
+    /**
+     * @brief Short callback-enabled promiscuous brew to coalesce heap
+     * @param dwellMs Total dwell time in milliseconds (default 1000ms)
+     * @param includeBleCleanup Deinit BLE before brew (default false)
+     * @return Size of largest contiguous block after brew
+     */
+    size_t brewHeap(uint32_t dwellMs = 1000, bool includeBleCleanup = false);
 }

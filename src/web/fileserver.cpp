@@ -3482,15 +3482,9 @@ void FileServer::stop() {
     // internal buffer reorganization which helps defragment the heap
     size_t largestBefore = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
     if (largestBefore < HeapPolicy::kFileServerRecoveryThreshold) {
-        // Multiple brew cycles for stubborn fragmentation after heavy file serving
+        // Short callback-enabled brew for reliable coalescing
         Serial.printf("[FILESERVER] Heap recovery starting: largest=%u\n", (unsigned)largestBefore);
-        for (int i = 0; i < 3; i++) {
-            esp_wifi_set_promiscuous(true);
-            delay(150);  // Longer dwell for better effect
-            esp_wifi_set_promiscuous(false);
-            delay(100);
-        }
-        size_t largestAfter = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+        size_t largestAfter = WiFiUtils::brewHeap(1000, false);
         Serial.printf("[FILESERVER] Heap recovery complete: %u -> %u (+%d)\n",
                       (unsigned)largestBefore, (unsigned)largestAfter,
                       (int)(largestAfter - largestBefore));

@@ -539,7 +539,12 @@ void init() {
 
 void start() {
     if (!initialized) init();
-    if (running) return;
+    if (running) {
+        if (paused) {
+            resume();
+        }
+        return;
+    }
     
     Serial.printf("[RECON] Starting background scan... free=%u largest=%u\n",
                   ESP.getFreeHeap(), heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));

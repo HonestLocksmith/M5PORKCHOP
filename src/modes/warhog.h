@@ -12,6 +12,10 @@
 #include "../gps/gps.h"
 #include "../ml/features.h"
 
+#ifndef WARHOG_ENABLE_ENHANCED
+#define WARHOG_ENABLE_ENHANCED 0
+#endif
+
 // BSSID key for map lookup (6 bytes as uint64_t)
 inline uint64_t bssidToKey(const uint8_t* bssid) {
     return ((uint64_t)bssid[0] << 40) | ((uint64_t)bssid[1] << 32) |
@@ -80,6 +84,7 @@ private:
     
     // Enhanced ML mode - beacon capture
     static bool enhancedMode;
+#if WARHOG_ENABLE_ENHANCED
     static std::map<uint64_t, WiFiFeatures> beaconFeatures;
     static std::atomic<uint32_t> beaconCount;  // Atomic for thread-safe access from callback + main
     static volatile bool beaconMapBusy;
@@ -92,6 +97,7 @@ private:
     static std::atomic<uint16_t> beaconQueueHead;
     static std::atomic<uint16_t> beaconQueueTail;
     static std::atomic<uint32_t> beaconQueueDropped;
+#endif
     // Background scan task
     static TaskHandle_t scanTaskHandle;
     static volatile int scanResult;

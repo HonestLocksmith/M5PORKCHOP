@@ -16,10 +16,15 @@ static size_t peakFree = 0;
 static size_t peakLargest = 0;
 static size_t minFree = 0;
 static size_t minLargest = 0;
+static bool conditionPending = false;
+static uint32_t lastConditionMs = 0;
 
 static const uint32_t SAMPLE_INTERVAL_MS = 1000;
 static const uint32_t TOAST_DURATION_MS = 5000;  // Match XP top bar duration
 static const uint8_t TOAST_MIN_DELTA = 5;
+static const uint8_t CONDITION_TRIGGER_PCT = 65;
+static const uint8_t CONDITION_CLEAR_PCT = 75;
+static const uint32_t CONDITION_COOLDOWN_MS = 30000;
 
 static uint8_t computePercent(size_t freeHeap, size_t largestBlock, bool updatePeaks) {
     if (updatePeaks) {
@@ -75,6 +80,21 @@ void update() {
     uint8_t deltaAbs = (delta < 0) ? (uint8_t)(-delta) : (uint8_t)delta;
     heapHealthPct = newPct;
 
+    bool contigLow = largestBlock < HeapPolicy::kProactiveTlsConditioning;
+    bool pctLow = newPct <= CONDITION_TRIGGER_PCT;
+    if (!conditionPending) {
+        if (pctLow && contigLow &&
+            (lastConditionMs == 0 || (now - lastConditionMs) >= CONDITION_COOLDOWN_MS)) {
+            conditionPending = true;
+        }
+    } else {
+        bool pctRecovered = newPct >= CONDITION_CLEAR_PCT;
+        bool contigRecovered = largestBlock >= HeapPolicy::kProactiveTlsConditioning;
+        if (pctRecovered && contigRecovered) {
+            conditionPending = false;
+        }
+    }
+
     if (delta != 0 && deltaAbs >= TOAST_MIN_DELTA) {
         if (now - lastToastMs >= TOAST_DURATION_MS) {
             toastDelta = deltaAbs;
@@ -96,6 +116,8 @@ void resetPeaks(bool suppressToast) {
     minFree = peakFree;
     minLargest = peakLargest;
     heapHealthPct = computePercent(peakFree, peakLargest, false);
+    conditionPending = false;
+    lastConditionMs = millis();
 
     if (suppressToast) {
         toastActive = false;
@@ -129,6 +151,12 @@ uint32_t getMinFree() {
 
 uint32_t getMinLargest() {
     return (uint32_t)minLargest;
+}
+
+bool consumeConditionRequest() {
+    if (!conditionPending) return false;
+    conditionPending = false;
+    return true;
 }
 
 }  // namespace HeapHealth

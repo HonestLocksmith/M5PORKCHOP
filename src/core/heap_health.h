@@ -16,6 +16,9 @@ namespace HeapHealth {
     uint32_t getMinFree();
     uint32_t getMinLargest();
 
+    // Conditioning trigger (set by update(), consumed by caller)
+    bool consumeConditionRequest();
+
     // Toast helpers
     bool shouldShowToast();
     bool isToastImproved();

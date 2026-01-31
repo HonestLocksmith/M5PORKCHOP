@@ -27,15 +27,18 @@
 #include "../web/fileserver.h"
 #include "../audio/sfx.h"
 #include "config.h"
+#include "heap_health.h"
 #include "xp.h"
 #include "sdlog.h"
 #include "sd_format.h"
 #include "challenges.h"
 #include "stress_test.h"
 #include "network_recon.h"
+#include "wifi_utils.h"
 #include <esp_heap_caps.h>
 #include <esp_attr.h>
 #include <esp_system.h>
+#include <WiFi.h>
 
 static const char* modeToString(PorkchopMode mode) {
     switch (mode) {
@@ -100,6 +103,51 @@ Porkchop::Porkchop()
     , handshakeCount(0)
     , networkCount(0)
     , deauthCount(0) {
+}
+
+static bool isAutoConditionSafe(PorkchopMode mode) {
+    switch (mode) {
+        case PorkchopMode::IDLE:
+        case PorkchopMode::MENU:
+        case PorkchopMode::SETTINGS:
+        case PorkchopMode::ABOUT:
+        case PorkchopMode::ACHIEVEMENTS:
+        case PorkchopMode::CRASH_VIEWER:
+        case PorkchopMode::DIAGNOSTICS:
+        case PorkchopMode::SWINE_STATS:
+        case PorkchopMode::BOAR_BROS:
+        case PorkchopMode::UNLOCKABLES:
+        case PorkchopMode::BOUNTY_STATUS:
+        case PorkchopMode::SD_FORMAT:
+            return true;
+        default:
+            return false;
+    }
+}
+
+static void maybeAutoConditionHeap(PorkchopMode mode) {
+    if (!isAutoConditionSafe(mode)) {
+        return;
+    }
+    if (FileServer::isRunning() || FileServer::isConnecting()) {
+        return;
+    }
+    if (WiFi.status() == WL_CONNECTED) {
+        return;
+    }
+    if (!HeapHealth::consumeConditionRequest()) {
+        return;
+    }
+
+    bool wasReconRunning = NetworkRecon::isRunning();
+    if (wasReconRunning) {
+        NetworkRecon::pause();
+    }
+    // Small, low-disruption brew to coalesce heap when health drops.
+    WiFiUtils::brewHeap(1200, false);
+    if (wasReconRunning) {
+        NetworkRecon::resume();
+    }
 }
 
 void Porkchop::init() {
@@ -219,6 +267,8 @@ void Porkchop::update() {
         }
     }
     updateMode();
+
+    maybeAutoConditionHeap(currentMode);
     
     // Tick non-blocking audio engine
     SFX::update();

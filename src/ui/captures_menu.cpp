@@ -11,6 +11,7 @@
 #include "../web/wpasec.h"
 #include "../core/config.h"
 #include "../core/sd_layout.h"
+#include "../core/wifi_utils.h"
 
 // Static member initialization
 std::vector<CaptureInfo> CapturesMenu::captures;
@@ -826,8 +827,8 @@ bool CapturesMenu::connectToWiFi() {
     
     if (WiFi.status() != WL_CONNECTED) {
         strncpy(syncError, "WIFI CONNECT FAILED", sizeof(syncError) - 1);
-        WiFi.disconnect(true);
-        WiFi.mode(WIFI_OFF);
+        // Keep driver alive to avoid esp_wifi_init 257 on fragmented heap.
+        WiFiUtils::shutdown();
         return false;
     }
     
@@ -836,8 +837,8 @@ bool CapturesMenu::connectToWiFi() {
 }
 
 void CapturesMenu::disconnectWiFi() {
-    WiFi.disconnect(true);
-    WiFi.mode(WIFI_OFF);
+    // Keep driver alive to avoid esp_wifi_init 257 on fragmented heap.
+    WiFiUtils::shutdown();
     Serial.println("[CAPTURES] WiFi disconnected");
 }
 

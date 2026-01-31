@@ -11,6 +11,7 @@
 #include "../web/wigle.h"
 #include "../core/sd_layout.h"
 #include "../core/heap_health.h"
+#include "../core/wifi_utils.h"
 #include <WiFi.h>
 #include <esp_heap_caps.h>
 #include <esp_wifi.h>
@@ -167,10 +168,8 @@ void DiagnosticsMenu::saveSnapshot() {
 }
 
 void DiagnosticsMenu::resetWiFi() {
-    WiFi.disconnect(true, true);
-    WiFi.mode(WIFI_OFF);
-    delay(100);
-    WiFi.mode(WIFI_STA);
+    // Avoid driver teardown to prevent esp_wifi_init 257 on fragmented heap.
+    WiFiUtils::hardReset();
 }
 
 void DiagnosticsMenu::logHeapSnapshot() {

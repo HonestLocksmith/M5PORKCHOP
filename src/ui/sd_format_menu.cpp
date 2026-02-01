@@ -10,12 +10,14 @@ bool SdFormatMenu::keyWasPressed = false;
 SdFormatMenu::State SdFormatMenu::state = SdFormatMenu::State::IDLE;
 SDFormat::Result SdFormatMenu::lastResult = {};
 bool SdFormatMenu::hasResult = false;
+SDFormat::FormatMode SdFormatMenu::formatMode = SDFormat::FormatMode::QUICK;
 
 void SdFormatMenu::show() {
     active = true;
     keyWasPressed = true;  // Ignore the Enter that brought us here
     state = State::IDLE;
     hasResult = false;
+    formatMode = SDFormat::FormatMode::QUICK;
     Display::clearBottomOverlay();
 }
 
@@ -63,13 +65,33 @@ void SdFormatMenu::handleInput() {
         return;
     }
 
-    if (keys.enter) {
-        if (!Config::isSDAvailable()) {
-            Display::notify(NoticeKind::WARNING, "NO SD CARD");
+    if (state == State::SELECT) {
+        if (M5Cardputer.Keyboard.isKeyPressed(';') || M5Cardputer.Keyboard.isKeyPressed('.')) {
+            formatMode = (formatMode == SDFormat::FormatMode::QUICK)
+                ? SDFormat::FormatMode::FULL
+                : SDFormat::FormatMode::QUICK;
             return;
         }
-        state = State::CONFIRM;
-        Display::setBottomOverlay("PERMANENT | NO UNDO");
+        if (keys.enter) {
+            Display::clearBottomOverlay();
+            state = State::CONFIRM;
+            Display::setBottomOverlay("PERMANENT | NO UNDO");
+            return;
+        }
+        if (M5Cardputer.Keyboard.isKeyPressed(KEY_BACKSPACE)) {
+            Display::clearBottomOverlay();
+            state = State::IDLE;
+            return;
+        }
+        return;
+    }
+
+    if (keys.enter) {
+        if (!Config::isSDAvailable()) {
+            Display::notify(NoticeKind::WARNING, "SD NOT MOUNTED");
+        }
+        state = State::SELECT;
+        Display::setBottomOverlay(";/ . TOGGLE  ENTER=OK");
         return;
     }
 
@@ -79,10 +101,8 @@ void SdFormatMenu::handleInput() {
 }
 
 void SdFormatMenu::startFormat() {
-    Display::showProgress("FORMATTING", 0);
-    lastResult = SDFormat::formatCard(true);
+    lastResult = SDFormat::formatCard(formatMode, true, onFormatProgress);
     hasResult = true;
-    Display::showProgress("FORMATTING", 100);
     state = State::RESULT;
 }
 
@@ -104,6 +124,8 @@ void SdFormatMenu::draw(M5Canvas& canvas) {
 
     if (state == State::RESULT && hasResult) {
         drawResult(canvas);
+    } else if (state == State::SELECT) {
+        drawSelect(canvas);
     } else {
         drawIdle(canvas);
     }
@@ -122,16 +144,33 @@ void SdFormatMenu::drawIdle(M5Canvas& canvas) {
 
     canvas.drawString("ERASES ALL DATA", 4, y);
     y += lineH;
-    canvas.drawString("FAT32 OR WIPE", 4, y);
+    canvas.drawString("FAT32 QUICK/FULL", 4, y);
     y += lineH;
 
     canvas.drawString("SD:", 4, y);
-    canvas.drawString(Config::isSDAvailable() ? "OK" : "MISSING", 40, y);
+    canvas.drawString(Config::isSDAvailable() ? "OK" : "NOT MOUNTED", 40, y);
     y += lineH;
 
-    canvas.drawString("ENTER=FORMAT", 4, y);
+    const char* modeLabel = (formatMode == SDFormat::FormatMode::FULL) ? "FULL" : "QUICK";
+    canvas.drawString("MODE:", 4, y);
+    canvas.drawString(modeLabel, 40, y);
+    y += lineH;
+
+    canvas.drawString("ENTER=SELECT", 4, y);
     y += lineH;
     canvas.drawString("BKSPC=BACK", 4, y);
+}
+
+void SdFormatMenu::drawSelect(M5Canvas& canvas) {
+    canvas.setTextDatum(top_center);
+    canvas.setTextSize(2);
+    canvas.drawString("FORMAT TYPE", DISPLAY_W / 2, 24);
+
+    canvas.setTextSize(1);
+    const char* modeLabel = (formatMode == SDFormat::FormatMode::FULL) ? "FULL (SLOW)" : "QUICK";
+    canvas.drawString(modeLabel, DISPLAY_W / 2, 50);
+    canvas.drawString(";/ . TOGGLE", DISPLAY_W / 2, 68);
+    canvas.drawString("ENTER=CONTINUE", DISPLAY_W / 2, 84);
 }
 
 void SdFormatMenu::drawWorking(M5Canvas& canvas) {
@@ -171,8 +210,14 @@ void SdFormatMenu::drawConfirm(M5Canvas& canvas) {
     canvas.setTextSize(1);
 
     int centerX = DISPLAY_W / 2;
-    canvas.drawString("!! FORMAT SD !!", centerX, boxY + 8);
-    canvas.drawString("ERASES ALL DATA", centerX, boxY + 22);
-    canvas.drawString("NO UNDO.", centerX, boxY + 36);
+    canvas.drawString("!! FORMAT SD !!", centerX, boxY + 6);
+    const char* modeLabel = (formatMode == SDFormat::FormatMode::FULL) ? "FULL FORMAT" : "QUICK FORMAT";
+    canvas.drawString(modeLabel, centerX, boxY + 20);
+    canvas.drawString("ERASES ALL DATA", centerX, boxY + 34);
     canvas.drawString("[Y] DO IT  [N] ABORT", centerX, boxY + 54);
+}
+
+void SdFormatMenu::onFormatProgress(const char* stage, uint8_t percent) {
+    if (!stage) stage = "FORMATTING";
+    Display::showProgress(stage, percent);
 }

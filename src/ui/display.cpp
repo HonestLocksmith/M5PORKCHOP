@@ -810,7 +810,7 @@ void Display::drawBottomBar() {
         // DIAGNOSTICS: show controls
         statsStr = "[ENT]SAVE [R]WIFI [H]HEAP [G]GC";
     } else if (mode == PorkchopMode::SD_FORMAT) {
-        statsStr = "ENTER=ARM  BKSP=EXIT";
+        statsStr = "ENTER=SELECT  BKSP=EXIT";
     } else if (mode == PorkchopMode::OINK_MODE) {
         // OINK: show Networks, Handshakes, Deauths, Channel, and optionally BRO count
         // PWNED banner is shown in top bar

@@ -15,6 +15,7 @@ public:
 private:
     enum class State : uint8_t {
         IDLE,
+        SELECT,
         CONFIRM,
         WORKING,
         RESULT
@@ -25,11 +26,14 @@ private:
     static State state;
     static SDFormat::Result lastResult;
     static bool hasResult;
+    static SDFormat::FormatMode formatMode;
 
     static void handleInput();
     static void startFormat();
     static void drawIdle(M5Canvas& canvas);
+    static void drawSelect(M5Canvas& canvas);
     static void drawConfirm(M5Canvas& canvas);
     static void drawWorking(M5Canvas& canvas);
     static void drawResult(M5Canvas& canvas);
+    static void onFormatProgress(const char* stage, uint8_t percent);
 };

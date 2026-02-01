@@ -133,6 +133,18 @@ bool Config::isSDAvailable() {
     return sdAvailable;
 }
 
+void Config::prepareSDBus() {
+    ensureSdSpiReady();
+}
+
+SPIClass& Config::sdSpi() {
+    return sdSPI;
+}
+
+int Config::sdCsPin() {
+    return SD_CS_PIN;
+}
+
 bool Config::reinitSD() {
     Serial.println("[CONFIG] Attempting SD card re-initialization...");
 

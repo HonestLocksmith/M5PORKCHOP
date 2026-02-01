@@ -3,6 +3,7 @@
 
 #include <Arduino.h>
 #include <ArduinoJson.h>
+#include <SPI.h>
 
 #define CONFIG_FILE "/porkchop.conf"
 #define PERSONALITY_FILE "/personality.json"
@@ -114,6 +115,9 @@ public:
     static bool reinitSD();  // Try to (re)initialize SD card at runtime
     static bool loadWpaSecKeyFromFile();  // Load key from /m5porkchop/wpa-sec/wpasec_key.txt (legacy /wpasec_key.txt)
     static bool loadWigleKeyFromFile();   // Load keys from /m5porkchop/wigle/wigle_key.txt (legacy /wigle_key.txt)
+    static void prepareSDBus();           // Prepare SPI bus for raw SD access
+    static SPIClass& sdSpi();             // Access SD SPI bus
+    static int sdCsPin();                 // Access SD chip-select pin
     
     // Getters
     static GPSConfig& gps() { return gpsConfig; }

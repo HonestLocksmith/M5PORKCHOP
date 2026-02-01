@@ -3,6 +3,7 @@
 #include <WiFi.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
+#include "heap_policy.h"
 
 namespace WiFiUtils {
     /**
@@ -80,5 +81,5 @@ namespace WiFiUtils {
      * @param includeBleCleanup Deinit BLE before brew (default false)
      * @return Size of largest contiguous block after brew
      */
-    size_t brewHeap(uint32_t dwellMs = 1000, bool includeBleCleanup = false);
+    size_t brewHeap(uint32_t dwellMs = HeapPolicy::kBrewDefaultDwellMs, bool includeBleCleanup = false);
 }

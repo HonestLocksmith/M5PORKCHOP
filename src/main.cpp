@@ -167,8 +167,8 @@ void performBootHeapConditioning() {
     Serial.printf("[BOOT] Initial heap: free=%u largest=%u\n", initialFree, initialLargest);
 
     // Phase 1: Create fragmentation pattern (mimics Oink mode startup)
-    const size_t FRAG_BLOCKS = 50;
-    const size_t FRAG_SIZE = 1024; // 1KB blocks
+    const int FRAG_BLOCKS = HeapPolicy::kBootFragBlocks;
+    const size_t FRAG_SIZE = HeapPolicy::kBootFragBlockSize; // 1KB blocks
     void* fragBlocks[FRAG_BLOCKS] = {nullptr};
     size_t fragAllocated = 0;
 
@@ -184,8 +184,8 @@ void performBootHeapConditioning() {
     Serial.printf("[BOOT] Fragmentation: %u/%u blocks (%uKB)\n", fragAllocated, FRAG_BLOCKS, (fragAllocated * FRAG_SIZE) / 1024);
 
     // Phase 2: Add larger blocks (like network structures in Oink)
-    const size_t STRUCT_BLOCKS = 20;
-    const size_t STRUCT_SIZE = 3072; // ~3KB (like DetectedNetwork + clients)
+    const int STRUCT_BLOCKS = HeapPolicy::kBootStructBlocks;
+    const size_t STRUCT_SIZE = HeapPolicy::kBootStructBlockSize; // ~3KB (like DetectedNetwork + clients)
     void* structBlocks[STRUCT_BLOCKS] = {nullptr};
     size_t structAllocated = 0;
 
@@ -230,7 +230,7 @@ void performBootHeapConditioning() {
 
     // Phase 4: Test TLS-sized allocations
     Serial.println("[BOOT] Phase 4: Testing TLS compatibility...");
-    const size_t TLS_SIZES[] = {26624, 32768, 40960}; // 26KB, 32KB, 40KB
+    const size_t* TLS_SIZES = HeapPolicy::kBootTlsTestSizes; // 26KB, 32KB, 40KB
     const char* TLS_NAMES[] = {"26KB", "32KB", "40KB"};
 
     for (int i = 0; i < 3; i++) {

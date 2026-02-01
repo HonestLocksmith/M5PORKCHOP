@@ -735,7 +735,8 @@ WPASecSyncResult WPASec::syncCaptures(WPASecProgressCallback cb) {
     bool potfileOk = false;
     
     // Attempt potfile if heap is sufficient - no reconditioning, graceful skip if low
-    if (heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) >= HeapPolicy::kMinContigForTls) {
+    HeapGates::GateStatus potGate = HeapGates::checkGate(0, HeapPolicy::kMinContigForTls);
+    if (potGate.failure == HeapGates::TlsGateFailure::None) {
         potfileOk = downloadPotfile(newCracks);
         if (potfileOk) {
             result.newCracked = newCracks;
@@ -745,7 +746,7 @@ WPASecSyncResult WPASec::syncCaptures(WPASecProgressCallback cb) {
         }
     } else {
         Serial.printf("[WPASEC] Skipping potfile: insufficient heap (%u < %u)\n",
-                      (unsigned int)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT),
+                      (unsigned int)potGate.largestBlock,
                       (unsigned int)HeapPolicy::kMinContigForTls);
         snprintf(lastError, sizeof(lastError), "POTFILE SKIP: LOW HEAP");
     }

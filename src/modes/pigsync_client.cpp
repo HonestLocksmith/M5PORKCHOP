@@ -1920,9 +1920,8 @@ bool PigSyncMode::startSync() {
     yield();
     
     // Guard: ensure enough contiguous heap for reliable transfer
-    HeapGates::HeapSnapshot heapNow = HeapGates::snapshot();
-    if (heapNow.largestBlock < HeapPolicy::kPigSyncMinContig) {
-        strcpy(lastError, "LOW HEAP");
+    HeapGates::GateStatus gate = HeapGates::checkGate(0, HeapPolicy::kPigSyncMinContig);
+    if (!HeapGates::canMeet(gate, lastError, sizeof(lastError))) {
         return false;
     }
     

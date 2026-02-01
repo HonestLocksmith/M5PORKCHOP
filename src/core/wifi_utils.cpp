@@ -329,7 +329,9 @@ size_t conditionHeapForTLS() {
     // CRITICAL: Must set promiscuous callback and filter like OINK does!
     // The driver only reorganizes when actually receiving packets.
     
-    Serial.println("[HEAP] Phase 2: WiFi promiscuous brewing (3s)...");
+    const uint32_t dwellMs = HeapPolicy::kConditioningDwellMs;
+    Serial.printf("[HEAP] Phase 2: WiFi promiscuous brewing (%ums)...\n",
+                  (unsigned)dwellMs);
     uint32_t brewStart = millis();
     brewPacketCount = 0;  // Reset packet counter
     
@@ -357,7 +359,9 @@ size_t conditionHeapForTLS() {
     // The WiFi driver's internal task needs time to reorganize buffers
     // Channel hopping ensures we receive packets on multiple channels
     const uint8_t channels[] = {1, 6, 11, 2, 7, 12, 3, 8, 13, 4, 9, 5, 10};
-    for (int i = 0; i < 30; i++) {  // 30 iterations × 100ms = 3 seconds
+    uint32_t steps = (dwellMs + 99) / 100;  // 100ms per step
+    if (steps < 1) steps = 1;
+    for (uint32_t i = 0; i < steps; i++) {
         esp_wifi_set_channel(channels[i % 13], WIFI_SECOND_CHAN_NONE);
         delay(100);
         yield();  // Let background tasks run
@@ -366,14 +370,14 @@ size_t conditionHeapForTLS() {
         size_t currentLargest = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
         if (i > 10 && currentLargest > HeapPolicy::kHeapStableThreshold) {
             Serial.printf("[HEAP] Early exit at %dms - heap stabilized (pkts=%u)\n", 
-                          (i + 1) * 100, brewPacketCount);
+                          (int)((i + 1) * 100), brewPacketCount);
             break;
         }
         
         // Log progress every second
         if ((i + 1) % 10 == 0) {
             Serial.printf("[HEAP] Brew %ds: free=%u largest=%u pkts=%u\n",
-                          (i + 1) / 10,
+                          (unsigned)((i + 1) / 10),
                           ESP.getFreeHeap(), currentLargest, brewPacketCount);
         }
     }

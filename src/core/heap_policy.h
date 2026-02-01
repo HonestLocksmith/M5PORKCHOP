@@ -48,4 +48,17 @@ namespace HeapPolicy {
 
     // Stress test guardrail
     static constexpr size_t kStressMinHeap = 70000;
+
+    // Boot conditioning (allocator training)
+    static constexpr int kBootFragBlocks = 50;
+    static constexpr size_t kBootFragBlockSize = 1024;
+    static constexpr int kBootStructBlocks = 20;
+    static constexpr size_t kBootStructBlockSize = 3072;
+    static constexpr size_t kBootTlsTestSizes[3] = {26624, 32768, 40960};
+
+    // Heap conditioning dwell times
+    static constexpr uint32_t kConditioningDwellMs = 3000;
+    static constexpr uint32_t kBrewDefaultDwellMs = 1000;
+    static constexpr uint32_t kBrewAutoDwellMs = 1200;
+    static constexpr uint32_t kBrewFileServerDwellMs = 2000;
 }

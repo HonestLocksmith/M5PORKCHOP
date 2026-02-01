@@ -778,7 +778,8 @@ WigleSyncResult WiGLE::syncFiles(WigleProgressCallback cb) {
                   (unsigned int)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
     
     // Attempt stats fetch if heap sufficient - no reconditioning, graceful skip if low
-    if (heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) >= HeapPolicy::kMinContigForTls) {
+    HeapGates::GateStatus statsGate = HeapGates::checkGate(0, HeapPolicy::kMinContigForTls);
+    if (statsGate.failure == HeapGates::TlsGateFailure::None) {
         result.statsFetched = fetchStats();
         if (!result.statsFetched) {
             Serial.printf("[WIGLE] Stats fetch failed: %s\n", lastError);

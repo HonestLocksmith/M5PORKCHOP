@@ -3415,11 +3415,12 @@ void FileServer::startServer() {
     
     // FIX: Heap guard before WebServer allocation - prevent OOM on ADV/tight heap
     {
-        HeapGates::HeapSnapshot heapNow = HeapGates::snapshot();
-        if (heapNow.freeHeap < HeapPolicy::kFileServerMinHeap ||
-            heapNow.largestBlock < HeapPolicy::kFileServerMinLargest) {
+        HeapGates::GateStatus gate = HeapGates::checkGate(
+            HeapPolicy::kFileServerMinHeap,
+            HeapPolicy::kFileServerMinLargest);
+        if (gate.failure != HeapGates::TlsGateFailure::None) {
             FS_LOGF("[FILESERVER] Low heap for WebServer: free=%u largest=%u\n",
-                          (unsigned)heapNow.freeHeap, (unsigned)heapNow.largestBlock);
+                          (unsigned)gate.freeHeap, (unsigned)gate.largestBlock);
             strcpy(statusMessage, "Low heap");
             MDNS.end();  // Clean up mDNS we just started
             WiFiUtils::shutdown();
@@ -3520,7 +3521,7 @@ void FileServer::stop() {
     if (largestBefore < HeapPolicy::kFileServerRecoveryThreshold) {
         // Short callback-enabled brew for reliable coalescing
         FS_LOGF("[FILESERVER] Heap recovery starting: largest=%u\n", (unsigned)largestBefore);
-        size_t largestAfter = WiFiUtils::brewHeap(2000, false);
+        size_t largestAfter = WiFiUtils::brewHeap(HeapPolicy::kBrewFileServerDwellMs, false);
         if (largestAfter < HeapPolicy::kMinContigForTls) {
             FS_LOGF("[FILESERVER] Brew insufficient (largest=%u), running full conditioning\n",
                           (unsigned)largestAfter);

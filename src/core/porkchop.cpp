@@ -18,6 +18,7 @@
 #include "../piglet/mood.h"
 #include "../piglet/avatar.h"
 #include "../modes/oink.h"
+#include "heap_policy.h"
 #include "../modes/donoham.h"
 #include "../modes/warhog.h"
 #include "../modes/piggyblues.h"
@@ -146,7 +147,7 @@ static void maybeAutoConditionHeap(PorkchopMode mode) {
         NetworkRecon::pause();
     }
     // Small, low-disruption brew to coalesce heap when health drops.
-    WiFiUtils::brewHeap(1200, false);
+    WiFiUtils::brewHeap(HeapPolicy::kBrewAutoDwellMs, false);
     if (wasReconRunning) {
         NetworkRecon::resume();
     }

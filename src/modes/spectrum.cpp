@@ -9,6 +9,7 @@
 #include "../core/stress_test.h"
 #include "../core/wsl_bypasser.h"
 #include "../core/wifi_utils.h"
+#include "../core/heap_gates.h"
 #include "../core/heap_policy.h"
 #include "../core/xp.h"
 #include "../ui/display.h"
@@ -266,7 +267,8 @@ void SpectrumMode::update() {
         
         if (!canGrow && networks.size() < MAX_SPECTRUM_NETWORKS) {
             // Check heap threshold (20KB) before growth operations
-            if (ESP.getFreeHeap() > HeapPolicy::kMinHeapForSpectrumGrowth) {
+            if (HeapGates::canGrow(HeapPolicy::kMinHeapForSpectrumGrowth,
+                                   HeapPolicy::kMinFragRatioForGrowth)) {
                 networks.reserve(networks.capacity() + 10);  // Grow by 10 slots
                 canGrow = true;
             } else {
@@ -276,7 +278,8 @@ void SpectrumMode::update() {
                 busy = false;
                 
                 // Re-check heap after recovery
-                if (ESP.getFreeHeap() > HeapPolicy::kMinHeapForSpectrumGrowth) {
+                if (HeapGates::canGrow(HeapPolicy::kMinHeapForSpectrumGrowth,
+                                       HeapPolicy::kMinFragRatioForGrowth)) {
                     networks.reserve(networks.capacity() + 10);
                     canGrow = true;
                 }

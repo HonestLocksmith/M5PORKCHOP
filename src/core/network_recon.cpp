@@ -6,6 +6,7 @@
 #include "config.h"
 #include "wsl_bypasser.h"
 #include "wifi_utils.h"
+#include "heap_gates.h"
 #include "heap_policy.h"
 #include <WiFi.h>
 #include <esp_wifi.h>
@@ -447,7 +448,9 @@ static void processDeferredEvents() {
         // Only add if we have pre-reserved capacity (no allocation needed)
         if (hasCapacity) {
             shouldAdd = true;
-        } else if (canGrow && ESP.getFreeHeap() > HeapPolicy::kMinHeapForReconGrowth) {
+        } else if (canGrow &&
+                   HeapGates::canGrow(HeapPolicy::kMinHeapForReconGrowth,
+                                      HeapPolicy::kMinFragRatioForGrowth)) {
             // Grow capacity OUTSIDE critical section to avoid heap ops while holding spinlock
             try {
                 networks.reserve(networks.capacity() + 20);

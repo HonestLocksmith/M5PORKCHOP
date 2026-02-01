@@ -7,6 +7,7 @@
 #include "../core/config.h"
 #include "../core/wsl_bypasser.h"
 #include "../core/wifi_utils.h"
+#include "../core/heap_gates.h"
 #include "../core/sdlog.h"
 #include "../core/sd_layout.h"
 #include "../core/xp.h"
@@ -3225,7 +3226,8 @@ void OinkMode::injectTestNetwork(const uint8_t* bssid, const char* ssid, uint8_t
         NetworkRecon::exitCritical();
         return;  // Cap
     }
-    if (ESP.getFreeHeap() < HeapPolicy::kMinHeapForOinkNetworkAdd) {
+    if (!HeapGates::canGrow(HeapPolicy::kMinHeapForOinkNetworkAdd,
+                            HeapPolicy::kMinFragRatioForGrowth)) {
         NetworkRecon::exitCritical();
         return;
     }

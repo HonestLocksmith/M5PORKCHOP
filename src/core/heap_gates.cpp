@@ -39,4 +39,25 @@ bool shouldProactivelyCondition(const TlsGateStatus& status) {
             status.largestBlock >= HeapPolicy::kMinContigForTls);
 }
 
+HeapSnapshot snapshot() {
+    size_t freeHeap = ESP.getFreeHeap();
+    size_t largestBlock = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+    float fragRatio = freeHeap > 0 ? (float)largestBlock / (float)freeHeap : 0.0f;
+    return {freeHeap, largestBlock, fragRatio};
+}
+
+bool canGrow(const HeapSnapshot& status, size_t minFreeHeap, float minFragRatio) {
+    if (status.freeHeap < minFreeHeap) {
+        return false;
+    }
+    if (minFragRatio > 0.0f && status.fragRatio < minFragRatio) {
+        return false;
+    }
+    return true;
+}
+
+bool canGrow(size_t minFreeHeap, float minFragRatio) {
+    return canGrow(snapshot(), minFreeHeap, minFragRatio);
+}
+
 }  // namespace HeapGates

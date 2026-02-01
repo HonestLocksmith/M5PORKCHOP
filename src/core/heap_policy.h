@@ -43,6 +43,9 @@ namespace HeapPolicy {
     static constexpr uint32_t kHealthConditionCooldownMs = 30000;
     static constexpr float kHealthFragPenaltyScale = 0.60f;
 
+    // Growth gating (fragmentation-aware)
+    static constexpr float kMinFragRatioForGrowth = 0.40f;
+
     // Stress test guardrail
     static constexpr size_t kStressMinHeap = 70000;
 }

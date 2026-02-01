@@ -16,6 +16,12 @@ namespace HeapGates {
         TlsGateFailure failure;
     };
 
+    struct HeapSnapshot {
+        size_t freeHeap;
+        size_t largestBlock;
+        float fragRatio;
+    };
+
     // Snapshot current heap and evaluate TLS gating status.
     TlsGateStatus checkTlsGates();
 
@@ -24,4 +30,11 @@ namespace HeapGates {
 
     // True when we are above the TLS gate but below the proactive threshold.
     bool shouldProactivelyCondition(const TlsGateStatus& status);
+
+    // Snapshot heap metrics for growth gating (free, largest, frag ratio).
+    HeapSnapshot snapshot();
+
+    // Fragmentation-aware growth gate.
+    bool canGrow(const HeapSnapshot& status, size_t minFreeHeap, float minFragRatio);
+    bool canGrow(size_t minFreeHeap, float minFragRatio);
 }

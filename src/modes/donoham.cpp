@@ -13,6 +13,7 @@
 #include "../core/xp.h"
 #include "../core/wsl_bypasser.h"
 #include "../core/wifi_utils.h"
+#include "../core/heap_gates.h"
 #include "../core/heap_policy.h"
 #include "../ui/display.h"
 #include "../piglet/mood.h"
@@ -330,14 +331,16 @@ void DoNoHamMode::update() {
             size_t capacityLimit = networks().capacity();
             bool hasCapacity = networks().size() < capacityLimit;
             bool canGrow = networks().size() < DNH_MAX_NETWORKS;
-            if ((hasCapacity || ESP.getFreeHeap() > HeapPolicy::kMinHeapForDnhGrowth) && canGrow) {
+            bool growthOk = HeapGates::canGrow(HeapPolicy::kMinHeapForDnhGrowth,
+                                               HeapPolicy::kMinFragRatioForGrowth);
+            if ((hasCapacity || growthOk) && canGrow) {
                 // Add new (no realloc if hasCapacity)
                 if (hasCapacity) {
                     networks().push_back(pendingNetworkLocal);
                     NetworkRecon::exitCritical();
                     XP::addXP(XPEvent::DNH_NETWORK_PASSIVE);
                     NetworkRecon::enterCritical();
-                } else if (ESP.getFreeHeap() > HeapPolicy::kMinHeapForDnhGrowth) {
+                } else if (growthOk) {
                     networks().push_back(pendingNetworkLocal);
                     NetworkRecon::exitCritical();
                     XP::addXP(XPEvent::DNH_NETWORK_PASSIVE);
@@ -1309,8 +1312,8 @@ void DoNoHamMode::injectTestNetwork(const uint8_t* bssid, const char* ssid, uint
     // Heap protection - prevent OOM crash from stress test flooding
     // Need ~300 bytes per DetectedNetwork + vector realloc overhead (can double capacity)
     // Be very conservative: require 80KB free to allow for reallocation headroom
-    size_t freeHeap = ESP.getFreeHeap();
-    if (freeHeap < HeapPolicy::kDnhInjectMinHeap) {
+    if (!HeapGates::canGrow(HeapPolicy::kDnhInjectMinHeap,
+                            HeapPolicy::kMinFragRatioForGrowth)) {
         // Silently drop - stress test is overwhelming the system
         return;
     }

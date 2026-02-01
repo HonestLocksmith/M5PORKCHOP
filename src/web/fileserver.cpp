@@ -11,6 +11,7 @@
 #include <vector>
 #include <atomic>
 #include "../core/wifi_utils.h"
+#include "../core/heap_gates.h"
 #include "../core/heap_policy.h"
 #include "../core/xp.h"
 #include "../ui/swine_stats.h"
@@ -3353,7 +3354,8 @@ bool FileServer::start(const char* ssid, const char* password) {
     }
 
     // Pre-start heap conditioning if contiguous block is below TLS threshold.
-    size_t largestBefore = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+    HeapGates::HeapSnapshot heapBefore = HeapGates::snapshot();
+    size_t largestBefore = heapBefore.largestBlock;
     if (largestBefore < HeapPolicy::kMinContigForTls) {
         FS_LOGF("[FILESERVER] Pre-start conditioning: largest=%u < %u\n",
                       (unsigned)largestBefore, (unsigned)HeapPolicy::kMinContigForTls);
@@ -3413,11 +3415,11 @@ void FileServer::startServer() {
     
     // FIX: Heap guard before WebServer allocation - prevent OOM on ADV/tight heap
     {
-        size_t freeHeap = ESP.getFreeHeap();
-        size_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
-        if (freeHeap < HeapPolicy::kFileServerMinHeap || largest < HeapPolicy::kFileServerMinLargest) {
+        HeapGates::HeapSnapshot heapNow = HeapGates::snapshot();
+        if (heapNow.freeHeap < HeapPolicy::kFileServerMinHeap ||
+            heapNow.largestBlock < HeapPolicy::kFileServerMinLargest) {
             FS_LOGF("[FILESERVER] Low heap for WebServer: free=%u largest=%u\n",
-                          (unsigned)freeHeap, (unsigned)largest);
+                          (unsigned)heapNow.freeHeap, (unsigned)heapNow.largestBlock);
             strcpy(statusMessage, "Low heap");
             MDNS.end();  // Clean up mDNS we just started
             WiFiUtils::shutdown();
@@ -3513,7 +3515,8 @@ void FileServer::stop() {
     // Heap recovery: brief promiscuous cycle to coalesce fragments
     // WebServer + mDNS allocations cause fragmentation; this triggers WiFi driver's
     // internal buffer reorganization which helps defragment the heap
-    size_t largestBefore = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+    HeapGates::HeapSnapshot heapBefore = HeapGates::snapshot();
+    size_t largestBefore = heapBefore.largestBlock;
     if (largestBefore < HeapPolicy::kFileServerRecoveryThreshold) {
         // Short callback-enabled brew for reliable coalescing
         FS_LOGF("[FILESERVER] Heap recovery starting: largest=%u\n", (unsigned)largestBefore);

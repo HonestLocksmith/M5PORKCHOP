@@ -108,7 +108,6 @@ private:
     static uint8_t lastCycleActivity;      // Total beacons in last cycle
     
     // Channel hopping
-    static void hopToNextChannel();
     static void startDwell();
     static uint16_t getAdaptiveHopDelay();
     static void decayChannelStats();

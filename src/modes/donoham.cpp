@@ -81,16 +81,9 @@ static volatile bool dnhBusy = false;
 
 // Protect pending handshake payload from partial writes in callback
 static portMUX_TYPE pendingHandshakeMux = portMUX_INITIALIZER_UNLOCKED;
-// Protect other deferred slots shared with callbacks
-static portMUX_TYPE pendingNetworkMux = portMUX_INITIALIZER_UNLOCKED;
 static portMUX_TYPE pendingPMKIDMux = portMUX_INITIALIZER_UNLOCKED;
 static portMUX_TYPE pendingBeaconMux = portMUX_INITIALIZER_UNLOCKED;
-static portMUX_TYPE pendingProbeMux = portMUX_INITIALIZER_UNLOCKED;
 static portMUX_TYPE pendingIncompleteMux = portMUX_INITIALIZER_UNLOCKED;
-
-// Single-slot deferred network add (same pattern as OINK)
-static volatile bool pendingNetworkAdd = false;
-static DetectedNetwork pendingNetwork;
 
 // Single-slot deferred PMKID create
 static volatile bool pendingPMKIDCreateReady = false;
@@ -103,6 +96,16 @@ struct PendingPMKIDCreate {
     uint8_t channel;
 };
 static PendingPMKIDCreate pendingPMKIDCreate;
+
+static void onNewNetworkDiscovered(wifi_auth_mode_t authmode, bool isHidden,
+                                   const char* ssid, int8_t rssi, uint8_t channel) {
+    (void)authmode;
+    (void)isHidden;
+    (void)ssid;
+    (void)rssi;
+    (void)channel;
+    XP::addXP(XPEvent::DNH_NETWORK_PASSIVE);
+}
 
 // Single-slot deferred handshake frame add (now stores all 4 frames)
 static volatile bool pendingHandshakeAdd = false;
@@ -130,14 +133,6 @@ static volatile bool pendingBeaconStore = false;
 static uint8_t pendingBeaconBSSID[6];
 static uint8_t pendingBeaconData[512];  // Static buffer, no malloc in callback
 static uint16_t pendingBeaconLen = 0;
-// Single-slot deferred probe response update
-static volatile bool pendingProbeResponseAdd = false;
-static struct {
-    uint8_t bssid[6];
-    char ssid[33];
-    int8_t rssi;
-    uint32_t lastSeen;
-} pendingProbeResponse;
 
 // Single-slot deferred incomplete handshake tracking
 static volatile bool pendingIncompleteAdd = false;
@@ -147,7 +142,17 @@ static const size_t DNH_HANDSHAKE_ALLOC_MIN_BLOCK = sizeof(CapturedHandshake) + 
 static const size_t DNH_PMKID_ALLOC_MIN_BLOCK = sizeof(CapturedPMKID) + HeapPolicy::kPmkidAllocSlack;
 
 // Channel order: 1, 6, 11 first (non-overlapping), then fill in
-static const uint8_t CHANNEL_ORDER[] = {1, 6, 11, 2, 7, 12, 3, 8, 13, 4, 9, 5, 10};
+// Keep in sync with NetworkRecon hop order for consistent stats.
+static const uint8_t CHANNEL_ORDER[] = {1, 6, 11, 2, 3, 4, 5, 7, 8, 9, 10, 12, 13};
+
+static int channelToIndex(uint8_t ch) {
+    for (int i = 0; i < 13; i++) {
+        if (CHANNEL_ORDER[i] == ch) {
+            return i;
+        }
+    }
+    return -1;
+}
 
 // Timing
 static uint32_t lastCleanupTime = 0;
@@ -203,8 +208,9 @@ void DoNoHamMode::start() {
     
     // Reset state
     state = DNHState::HOPPING;
-    channelIndex = 0;
-    currentChannel = CHANNEL_ORDER[0];
+    currentChannel = NetworkRecon::getCurrentChannel();
+    int startIdx = channelToIndex(currentChannel);
+    channelIndex = (startIdx >= 0) ? (uint8_t)startIdx : 0;
     lastHopTime = millis();
     lastCleanupTime = millis();
     lastSaveTime = millis();
@@ -217,14 +223,12 @@ void DoNoHamMode::start() {
     dwellResolved = false;
     
     // Reset deferred flags
-    pendingNetworkAdd = false;
     pendingPMKIDCreateReady = false;
     pendingPMKIDCreateBusy = false;
     pendingHandshakeAdd = false;
     pendingHandshakeBusy = false;
     pendingHandshakeCapture = false;
     pendingBeaconStore = false;
-    pendingProbeResponseAdd = false;
     pendingIncompleteAdd = false;
     
     // CRITICAL: Set running flag with memory barrier
@@ -233,6 +237,7 @@ void DoNoHamMode::start() {
     
     // Register our packet callback for EAPOL/PMKID capture
     NetworkRecon::setPacketCallback(promiscuousCallback);
+    NetworkRecon::setNewNetworkCallback(onNewNetworkDiscovered);
     
     // UI feedback
     Display::notify(NoticeKind::STATUS, "PEACEFUL VIBES - NO TROUBLE TODAY", 5000, NoticeChannel::TOP_BAR);
@@ -256,14 +261,26 @@ void DoNoHamMode::stop() {
     
     // Clear our packet callback (NetworkRecon keeps running)
     NetworkRecon::setPacketCallback(nullptr);
+    NetworkRecon::setNewNetworkCallback(nullptr);
+    if (NetworkRecon::isChannelLocked()) {
+        NetworkRecon::unlockChannel();
+    }
     
     // Process any deferred XP saves
     XP::processPendingSave();
     
     // Process deferred capture saves
     pendingSaveFlag = false;
+    bool pausedByUs = false;
+    if (NetworkRecon::isRunning()) {
+        NetworkRecon::pause();
+        pausedByUs = true;
+    }
     saveAllPMKIDs();
     saveAllHandshakes();
+    if (pausedByUs) {
+        NetworkRecon::resume();
+    }
     
     // Free per-handshake beacon memory to prevent leaks
     for (auto& hs : handshakes) {
@@ -282,14 +299,12 @@ void DoNoHamMode::stop() {
     dnhBusy = false;
     
     // Reset deferred flags
-    pendingNetworkAdd = false;
     pendingPMKIDCreateReady = false;
     pendingPMKIDCreateBusy = false;
     pendingHandshakeAdd = false;
     pendingHandshakeBusy = false;
     pendingHandshakeCapture = false;
     pendingBeaconStore = false;
-    pendingProbeResponseAdd = false;
     pendingIncompleteAdd = false;
     Mood::setDialogueLock(false);
 }
@@ -301,108 +316,15 @@ void DoNoHamMode::update() {
     
     // Set busy flag for race protection
     dnhBusy = true;
+
+    // Sync channel state from NetworkRecon
+    currentChannel = NetworkRecon::getCurrentChannel();
+    int chanIdx = channelToIndex(currentChannel);
+    if (chanIdx >= 0) {
+        channelIndex = (uint8_t)chanIdx;
+    }
     
-    // Process deferred network add
-    DetectedNetwork pendingNetworkLocal = {};
-    bool hasPendingNetwork = false;
-    taskENTER_CRITICAL(&pendingNetworkMux);
-    if (pendingNetworkAdd) {
-        pendingNetworkLocal = pendingNetwork;
-        pendingNetworkAdd = false;
-        hasPendingNetwork = true;
-    }
-    taskEXIT_CRITICAL(&pendingNetworkMux);
-
-    if (hasPendingNetwork) {
-        // Check if already exists (updates are safe even under low heap)
-        int idx = NetworkRecon::findNetworkIndex(pendingNetworkLocal.bssid);
-        NetworkRecon::enterCritical();
-        if (idx >= 0 && idx < (int)networks().size()) {
-            // Update existing
-            networks()[idx].rssi = pendingNetworkLocal.rssi;
-            networks()[idx].lastSeen = pendingNetworkLocal.lastSeen;
-            networks()[idx].beaconCount++;
-            // Backfill SSID if we didn't have it before (critical for PMKID save)
-            if (networks()[idx].ssid[0] == 0 && pendingNetworkLocal.ssid[0] != 0) {
-                strncpy(networks()[idx].ssid, pendingNetworkLocal.ssid, 32);
-                networks()[idx].ssid[32] = 0;
-            }
-        } else {
-            size_t capacityLimit = networks().capacity();
-            bool hasCapacity = networks().size() < capacityLimit;
-            bool canGrow = networks().size() < DNH_MAX_NETWORKS;
-            bool growthOk = HeapGates::canGrow(HeapPolicy::kMinHeapForDnhGrowth,
-                                               HeapPolicy::kMinFragRatioForGrowth);
-            if ((hasCapacity || growthOk) && canGrow) {
-                // Add new (no realloc if hasCapacity)
-                if (hasCapacity) {
-                    networks().push_back(pendingNetworkLocal);
-                    NetworkRecon::exitCritical();
-                    XP::addXP(XPEvent::DNH_NETWORK_PASSIVE);
-                    NetworkRecon::enterCritical();
-                } else if (growthOk) {
-                    networks().push_back(pendingNetworkLocal);
-                    NetworkRecon::exitCritical();
-                    XP::addXP(XPEvent::DNH_NETWORK_PASSIVE);
-                    NetworkRecon::enterCritical();
-                }
-            } else if (!networks().empty()) {
-                size_t oldestIndex = 0;
-                uint32_t oldestSeen = networks()[0].lastSeen;
-                for (size_t i = 1; i < networks().size(); i++) {
-                    if (networks()[i].lastSeen < oldestSeen) {
-                        oldestSeen = networks()[i].lastSeen;
-                        oldestIndex = i;
-                    }
-                }
-                networks()[oldestIndex] = pendingNetworkLocal;
-                NetworkRecon::exitCritical();
-                XP::addXP(XPEvent::DNH_NETWORK_PASSIVE);
-                NetworkRecon::enterCritical();
-            }
-        }
-        NetworkRecon::exitCritical();
-    }
-
-    // Process deferred probe response updates
-    bool hasPendingProbe = false;
-    decltype(pendingProbeResponse) pendingProbeLocal = {};
-    taskENTER_CRITICAL(&pendingProbeMux);
-    if (pendingProbeResponseAdd) {
-        pendingProbeLocal = pendingProbeResponse;
-        pendingProbeResponseAdd = false;
-        hasPendingProbe = true;
-    }
-    taskEXIT_CRITICAL(&pendingProbeMux);
-
-    if (hasPendingProbe) {
-        bool pendingSlotMatch = false;
-        taskENTER_CRITICAL(&pendingNetworkMux);
-        if (pendingNetworkAdd && memcmp(pendingNetwork.bssid, pendingProbeLocal.bssid, 6) == 0) {
-            if (pendingNetwork.ssid[0] == 0 && pendingProbeLocal.ssid[0] != 0) {
-                strncpy(pendingNetwork.ssid, pendingProbeLocal.ssid, 32);
-                pendingNetwork.ssid[32] = 0;
-                pendingNetwork.rssi = pendingProbeLocal.rssi;
-                pendingNetwork.lastSeen = pendingProbeLocal.lastSeen;
-            }
-            pendingSlotMatch = true;
-        }
-        taskEXIT_CRITICAL(&pendingNetworkMux);
-
-        if (!pendingSlotMatch) {
-            int idx = NetworkRecon::findNetworkIndex(pendingProbeLocal.bssid);
-            NetworkRecon::enterCritical();
-            if (idx >= 0 && idx < (int)networks().size()) {
-                if (networks()[idx].ssid[0] == 0 && pendingProbeLocal.ssid[0] != 0) {
-                    strncpy(networks()[idx].ssid, pendingProbeLocal.ssid, 32);
-                    networks()[idx].ssid[32] = 0;
-                }
-                networks()[idx].rssi = pendingProbeLocal.rssi;
-                networks()[idx].lastSeen = pendingProbeLocal.lastSeen;
-            }
-            NetworkRecon::exitCritical();
-        }
-    }
+    // Network discovery is handled by NetworkRecon; DNH does not mutate shared networks.
     
     // Process deferred beacon storage for handshakes (ESP32 dual-core race fix)
     // Callback copied beacon to static buffer, we do malloc here in main thread
@@ -496,10 +418,16 @@ void DoNoHamMode::update() {
                         Mood::onPMKIDCaptured(pendingPMKIDLocal.ssid);
                         
                         // Immediate save with brief promiscuous pause (safe SD access)
-                        esp_wifi_set_promiscuous(false);
+                        bool pausedByUs = false;
+                        if (NetworkRecon::isRunning()) {
+                            NetworkRecon::pause();
+                            pausedByUs = true;
+                        }
                         delay(5);
                         saveAllPMKIDs();
-                        esp_wifi_set_promiscuous(true);
+                        if (pausedByUs) {
+                            NetworkRecon::resume();
+                        }
                     }
                 }
             }
@@ -612,10 +540,16 @@ void DoNoHamMode::update() {
         
         // Immediate save with brief promiscuous pause (safe SD access)
         // ~50ms gap is acceptable - we just captured what we needed
-        esp_wifi_set_promiscuous(false);
+        bool pausedByUs = false;
+        if (NetworkRecon::isRunning()) {
+            NetworkRecon::pause();
+            pausedByUs = true;
+        }
         delay(5);  // Let SPI bus settle
         saveAllHandshakes();
-        esp_wifi_set_promiscuous(true);
+        if (pausedByUs) {
+            NetworkRecon::resume();
+        }
     }
     
     // Periodic beacon data audit to prevent leaks (every 10s - Phase 3A fix)
@@ -645,9 +579,11 @@ void DoNoHamMode::update() {
     switch (state) {
         case DNHState::HOPPING:
             {
+                if (NetworkRecon::isChannelLocked()) {
+                    NetworkRecon::unlockChannel();
+                }
                 uint32_t hopDelay = getAdaptiveHopDelay();
                 if (now - lastHopTime > hopDelay) {
-                    hopToNextChannel();
                     lastHopTime = now;
                     
                     // Check if we should enter HUNTING mode after hop
@@ -661,33 +597,47 @@ void DoNoHamMode::update() {
             break;
             
         case DNHState::DWELLING:
+            if (!NetworkRecon::isChannelLocked()) {
+                NetworkRecon::lockChannel(currentChannel);
+            }
             if (dwellResolved || (now - dwellStartTime > DNH_DWELL_TIME)) {
                 state = DNHState::HOPPING;
                 dwellResolved = false;
+                if (NetworkRecon::isChannelLocked()) {
+                    NetworkRecon::unlockChannel();
+                }
             }
             break;
             
         case DNHState::HUNTING:
+            if (!NetworkRecon::isChannelLocked()) {
+                NetworkRecon::lockChannel(currentChannel);
+            }
             if (now - huntStartTime > HUNT_DURATION) {
                 // Hunt timeout, return to hopping
                 state = DNHState::HOPPING;
                 lastHuntTime = now;
                 lastHuntChannel = currentChannel;
+                if (NetworkRecon::isChannelLocked()) {
+                    NetworkRecon::unlockChannel();
+                }
             }
             // HUNTING state deliberately does NOT hop - camps on hot channel
             break;
             
         case DNHState::IDLE_SWEEP:
             {
+                if (NetworkRecon::isChannelLocked()) {
+                    NetworkRecon::unlockChannel();
+                }
                 uint32_t peekDelay = IDLE_SWEEP_TIME;
                 if (now - lastHopTime > peekDelay) {
-                    hopToNextChannel();
                     lastHopTime = now;
                     
                     // If we see ANY activity, exit IDLE_SWEEP
-                    int idx = currentChannel - 1;
+                    int idx = (int)channelIndex;
                     if (idx >= 0 && idx < 13) {
-                        if (channelStats[idx].beaconCount > 0) {
+                        if (channelStats[idx].beaconCount > 0 || channelStats[idx].eapolCount > 0) {
                             state = DNHState::HOPPING;
                         }
                     }
@@ -736,12 +686,6 @@ void DoNoHamMode::update() {
     }
     
     dnhBusy = false;
-}
-
-void DoNoHamMode::hopToNextChannel() {
-    channelIndex = (channelIndex + 1) % 13;
-    currentChannel = CHANNEL_ORDER[channelIndex];
-    esp_wifi_set_channel(currentChannel, WIFI_SECOND_CHAN_NONE);
 }
 
 // Check if channel is primary (1, 6, or 11)
@@ -805,6 +749,9 @@ bool DoNoHamMode::checkHuntingTrigger() {
         huntStartTime = now;
         lastHuntChannel = currentChannel;
         lastHuntTime = now;
+        if (!NetworkRecon::isChannelLocked()) {
+            NetworkRecon::lockChannel(currentChannel);
+        }
         return true;
     }
     return false;
@@ -866,6 +813,9 @@ void DoNoHamMode::startDwell() {
     state = DNHState::DWELLING;
     dwellStartTime = millis();
     dwellResolved = false;
+    if (!NetworkRecon::isChannelLocked()) {
+        NetworkRecon::lockChannel(currentChannel);
+    }
 }
 
 // NOTE: ageOutStaleNetworks() removed - network cleanup is now handled centrally
@@ -1431,21 +1381,6 @@ void DoNoHamMode::handleBeacon(const uint8_t* frame, uint16_t len, int8_t rssi) 
         taskEXIT_CRITICAL(&pendingPMKIDMux);
     }
     
-    // Queue network for deferred add
-    taskENTER_CRITICAL(&pendingNetworkMux);
-    if (!pendingNetworkAdd) {
-        memset(&pendingNetwork, 0, sizeof(pendingNetwork));
-        memcpy(pendingNetwork.bssid, bssid, 6);
-        strncpy(pendingNetwork.ssid, ssid, 32);
-        pendingNetwork.ssid[32] = 0;
-        pendingNetwork.rssi = rssi;
-        pendingNetwork.channel = currentChannel;
-        pendingNetwork.lastSeen = millis();
-        pendingNetwork.beaconCount = 1;
-        pendingNetworkAdd = true;
-    }
-    taskEXIT_CRITICAL(&pendingNetworkMux);
-    
     // Store beacon for any in-progress handshakes from this BSSID
     // (needed for PCAP export / WPA-SEC upload)
     // DEFERRED: Copy beacon to static buffer, let update() do malloc AND matching
@@ -1463,7 +1398,7 @@ void DoNoHamMode::handleBeacon(const uint8_t* frame, uint16_t len, int8_t rssi) 
     taskEXIT_CRITICAL(&pendingBeaconMux);
     
     // Track channel activity for adaptive hopping
-    int idx = currentChannel - 1;
+    int idx = channelToIndex(currentChannel);
     if (idx >= 0 && idx < 13) {
         channelStats[idx].beaconCount++;
         channelStats[idx].lifetimeBeacons++;
@@ -1472,40 +1407,10 @@ void DoNoHamMode::handleBeacon(const uint8_t* frame, uint16_t len, int8_t rssi) 
 }
 
 void DoNoHamMode::handleProbeResponse(const uint8_t* frame, uint16_t len, int8_t rssi) {
-    if (!running) return;
-    if (dnhBusy) return;  // Skip if update() is processing vectors
-    if (len < 36) return;
-    
-    const uint8_t* bssid = frame + 16;
-    
-    char ssid[33] = {0};
-    uint16_t offset = 36;
-    
-    while (offset + 2 < len) {
-        uint8_t ieType = frame[offset];
-        uint8_t ieLen = frame[offset + 1];
-        if (offset + 2 + ieLen > len) break;
-        
-        if (ieType == 0 && ieLen > 0 && ieLen <= 32) {
-            memcpy(ssid, frame + offset + 2, ieLen);
-            ssid[ieLen] = 0;
-            break;
-        }
-        offset += 2 + ieLen;
-    }
-    
-    if (ssid[0] == 0) return;
-    
-    taskENTER_CRITICAL(&pendingProbeMux);
-    if (!pendingProbeResponseAdd) {
-        memcpy(pendingProbeResponse.bssid, bssid, 6);
-        strncpy(pendingProbeResponse.ssid, ssid, 32);
-        pendingProbeResponse.ssid[32] = 0;
-        pendingProbeResponse.rssi = rssi;
-        pendingProbeResponse.lastSeen = millis();
-        pendingProbeResponseAdd = true;
-    }
-    taskEXIT_CRITICAL(&pendingProbeMux);
+    (void)frame;
+    (void)len;
+    (void)rssi;
+    // NetworkRecon handles probe responses and SSID backfill.
 }
 
 void DoNoHamMode::handleEAPOL(const uint8_t* frame, uint16_t len, int8_t rssi) {
@@ -1700,7 +1605,7 @@ void DoNoHamMode::handleEAPOL(const uint8_t* frame, uint16_t len, int8_t rssi) {
     taskEXIT_CRITICAL(&pendingHandshakeMux);
     
     // Track channel activity for adaptive hopping
-    int idx = currentChannel - 1;
+    int idx = channelToIndex(currentChannel);
     if (idx >= 0 && idx < 13) {
         channelStats[idx].eapolCount++;
         channelStats[idx].lastActivity = millis();

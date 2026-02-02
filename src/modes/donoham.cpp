@@ -281,9 +281,16 @@ void DoNoHamMode::stop() {
     SDLog::log("DNH", "Stopping");
     
     running = false;
+    dnhBusy = true;
     
     // Stop grass animation
     Avatar::setGrassMoving(false);
+    
+    bool pausedByUs = false;
+    if (NetworkRecon::isRunning()) {
+        NetworkRecon::pause();
+        pausedByUs = true;
+    }
     
     // Clear our packet callback (NetworkRecon keeps running)
     NetworkRecon::setPacketCallback(nullptr);
@@ -291,17 +298,30 @@ void DoNoHamMode::stop() {
     if (NetworkRecon::isChannelLocked()) {
         NetworkRecon::unlockChannel();
     }
+
+    // Swap handshake pool safely before freeing to avoid callback races
+    PendingHandshakeFrame* oldPool = nullptr;
+    bool oldAllocated = false;
+    taskENTER_CRITICAL(&pendingHandshakeMux);
+    oldPool = pendingHandshakePool;
+    oldAllocated = pendingHandshakePoolAllocated;
+    pendingHandshakePool = &pendingHandshakeFallback;
+    pendingHandshakeSlots = 1;
+    pendingHandshakePoolAllocated = false;
+    pendingHandshakeWrite = 0;
+    for (uint8_t i = 0; i < PENDING_HS_SLOTS; i++) {
+        pendingHandshakeUsed[i] = false;
+    }
+    taskEXIT_CRITICAL(&pendingHandshakeMux);
+    if (oldAllocated && oldPool) {
+        free(oldPool);
+    }
     
     // Process any deferred XP saves
     XP::processPendingSave();
     
     // Process deferred capture saves
     pendingSaveFlag = false;
-    bool pausedByUs = false;
-    if (NetworkRecon::isRunning()) {
-        NetworkRecon::pause();
-        pausedByUs = true;
-    }
     saveAllPMKIDs();
     saveAllHandshakes();
     if (pausedByUs) {
@@ -317,12 +337,10 @@ void DoNoHamMode::stop() {
     }
     
     // Clear DNH-specific vectors only (networks is shared via NetworkRecon)
-    dnhBusy = true;
     pmkids.clear();
     pmkids.shrink_to_fit();
     handshakes.clear();
     handshakes.shrink_to_fit();
-    dnhBusy = false;
     
     // Reset deferred flags
     pendingPMKIDWrite = 0;
@@ -334,16 +352,8 @@ void DoNoHamMode::stop() {
     pendingIncompleteRead = 0;
     pendingIncompleteCount = 0;
     pendingHandshakeWrite = 0;
-    for (uint8_t i = 0; i < PENDING_HS_SLOTS; i++) {
-        pendingHandshakeUsed[i] = false;
-    }
-    if (pendingHandshakePoolAllocated && pendingHandshakePool) {
-        free(pendingHandshakePool);
-    }
-    pendingHandshakePool = &pendingHandshakeFallback;
-    pendingHandshakeSlots = 1;
-    pendingHandshakePoolAllocated = false;
     Mood::setDialogueLock(false);
+    dnhBusy = false;
 }
 
 void DoNoHamMode::update() {
@@ -369,7 +379,7 @@ void DoNoHamMode::update() {
     // Process deferred beacon storage for handshakes (ESP32 dual-core race fix)
     // Callback copied beacon to static buffer, we do malloc here in main thread
     uint8_t pendingBeaconBssidLocal[6] = {0};
-    uint8_t pendingBeaconDataLocal[512];
+    static uint8_t pendingBeaconDataLocal[512];
     uint16_t pendingBeaconLenLocal = 0;
     bool hasPendingBeacon = false;
     taskENTER_CRITICAL(&pendingBeaconMux);
@@ -513,8 +523,8 @@ void DoNoHamMode::update() {
     }
     
     // Process deferred handshake frame add (ring buffer)
+    static PendingHandshakeFrame pendingHandshakeLocal;
     while (true) {
-        PendingHandshakeFrame pendingHandshakeLocal = {};
         bool hasPendingHandshake = false;
         taskENTER_CRITICAL(&pendingHandshakeMux);
         int slot = -1;
@@ -731,18 +741,6 @@ void DoNoHamMode::update() {
     // to avoid race conditions with shared vector. DNH only prunes its own incomplete handshakes.
     if (now - lastCleanupTime > 10000) {
         pruneIncompleteHandshakes(); // Prune stale handshake tracking (DNH-specific)
-        
-        // Phase 3A: Shrink vectors after cleanup to reclaim memory
-        if (incompleteHandshakes.size() < incompleteHandshakes.capacity() / 2) {
-            incompleteHandshakes.shrink_to_fit();
-        }
-        if (handshakes.size() < handshakes.capacity() / 2) {
-            handshakes.shrink_to_fit();
-        }
-        if (pmkids.size() < pmkids.capacity() / 2) {
-            pmkids.shrink_to_fit();
-        }
-        
         lastCleanupTime = now;
     }
     

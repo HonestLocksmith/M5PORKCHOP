@@ -319,8 +319,6 @@ void SdFormatMenu::drawConfirmEntry(M5Canvas& canvas) {
     canvas.drawString("- WIFI SHUTDOWN", centerX, y);
     y += 9;
     canvas.drawString("- NETWORK SCAN STOP", centerX, y);
-    y += 9;
-    canvas.drawString("- FILESERVER STOP", centerX, y);
     y += 12;
     
     // Smaller text to save vertical space

@@ -12,14 +12,17 @@ public:
     static bool isActive() { return active; }
     static void draw(M5Canvas& canvas);
     static const char* getSelectedDescription();
+    
+    // Bar-less mode: SD format runs without top/bottom bars to save RAM
+    static bool areBarsHidden() { return barsHidden; }
 
 private:
     enum class State : uint8_t {
-        IDLE,
-        SELECT,
-        CONFIRM,
-        WORKING,
-        RESULT
+        CONFIRM_ENTRY,  // Warning dialog before entering (Y/N)
+        SELECT,         // Format mode selection (QUICK/FULL)
+        CONFIRM,        // Final confirmation before format
+        WORKING,        // Formatting in progress
+        RESULT          // Format complete, waiting for reboot
     };
 
     static bool active;
@@ -30,6 +33,10 @@ private:
     static SDFormat::FormatMode formatMode;
     static uint8_t progressPercent;
     static char progressStage[16];
+    
+    // System state
+    static bool barsHidden;      // True when bars are hidden (saves RAM)
+    static bool systemStopped;   // True when NetworkRecon/WiFi stopped
 
     // Hint system
     static const char* const HINTS[];
@@ -38,7 +45,10 @@ private:
 
     static void handleInput();
     static void startFormat();
-    static void drawIdle(M5Canvas& canvas);
+    static bool showEntryWarning();   // Entry warning dialog (like PIGGYBLUES)
+    static void stopEverything();     // Stop NetworkRecon, FileServer, WiFi
+    static void doReboot();           // Reboot with countdown
+    static void drawConfirmEntry(M5Canvas& canvas);
     static void drawSelect(M5Canvas& canvas);
     static void drawConfirm(M5Canvas& canvas);
     static void drawWorking(M5Canvas& canvas);

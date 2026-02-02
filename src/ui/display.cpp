@@ -263,7 +263,12 @@ void Display::update() {
     // Check for screen dimming
     updateDimming();
     
-    drawTopBar();
+    // SD Format mode hides bars to save RAM for disk operations
+    bool barsHidden = SdFormatMenu::areBarsHidden();
+    
+    if (!barsHidden) {
+        drawTopBar();
+    }
 
     PorkchopMode mode = porkchop.getMode();
     bool useAvatarWeather = (mode == PorkchopMode::IDLE ||
@@ -435,7 +440,9 @@ void Display::update() {
         toastActive = false;
     }
 
-    drawBottomBar();
+    if (!barsHidden) {
+        drawBottomBar();
+    }
     pushAll();
 }
 

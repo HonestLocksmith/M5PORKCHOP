@@ -1,10 +1,21 @@
 // SD Format Menu - destructive SD card formatting UI
-// Aligned with project UI patterns (settings_menu, menu.cpp)
+// CRITICAL MODE: Stops all system operations, requires reboot after
+// Runs bar-less to maximize RAM for disk operations
 
 #include "sd_format_menu.h"
 #include "display.h"
 #include "../core/config.h"
+#include "../core/network_recon.h"
+#include "../web/fileserver.h"
 #include <M5Cardputer.h>
+#include <WiFi.h>
+
+// ============================================================================
+// CONSTANTS
+// ============================================================================
+static const uint16_t DIALOG_WIDTH = 220;
+static const uint16_t DIALOG_HEIGHT = 90;
+static const uint32_t REBOOT_DELAY_MS = 2000;  // Show "REBOOTING" for 2s
 
 // ============================================================================
 // HINT POOL (flash-resident, project style)
@@ -26,13 +37,15 @@ const uint8_t SdFormatMenu::HINT_COUNT = sizeof(H_SD_FORMAT) / sizeof(H_SD_FORMA
 // ============================================================================
 bool SdFormatMenu::active = false;
 bool SdFormatMenu::keyWasPressed = false;
-SdFormatMenu::State SdFormatMenu::state = SdFormatMenu::State::IDLE;
+SdFormatMenu::State SdFormatMenu::state = SdFormatMenu::State::CONFIRM_ENTRY;
 SDFormat::Result SdFormatMenu::lastResult = {};
 bool SdFormatMenu::hasResult = false;
 SDFormat::FormatMode SdFormatMenu::formatMode = SDFormat::FormatMode::QUICK;
 uint8_t SdFormatMenu::progressPercent = 0;
 char SdFormatMenu::progressStage[16] = "";
 uint8_t SdFormatMenu::hintIndex = 0;
+bool SdFormatMenu::barsHidden = false;
+bool SdFormatMenu::systemStopped = false;
 
 // ============================================================================
 // PUBLIC API
@@ -41,17 +54,26 @@ uint8_t SdFormatMenu::hintIndex = 0;
 void SdFormatMenu::show() {
     active = true;
     keyWasPressed = true;  // Ignore the Enter that brought us here
-    state = State::IDLE;
+    state = State::CONFIRM_ENTRY;  // Start with entry warning
     hasResult = false;
     formatMode = SDFormat::FormatMode::QUICK;
     progressPercent = 0;
     progressStage[0] = '\0';
     hintIndex = esp_random() % HINT_COUNT;
+    barsHidden = false;
+    systemStopped = false;
     Display::clearBottomOverlay();
 }
 
 void SdFormatMenu::hide() {
+    // If we entered the format mode (past CONFIRM_ENTRY), we MUST reboot
+    if (systemStopped) {
+        doReboot();
+        return;  // Never reached
+    }
+    
     active = false;
+    barsHidden = false;
     Display::clearBottomOverlay();
 }
 
@@ -68,8 +90,8 @@ const char* SdFormatMenu::getSelectedDescription() {
     if (!active) return "";
     
     switch (state) {
-        case State::IDLE:
-            return "ENTER TO FORMAT SD CARD";
+        case State::CONFIRM_ENTRY:
+            return "CRITICAL: SYSTEM WILL STOP";
         case State::SELECT:
             return (formatMode == SDFormat::FormatMode::FULL)
                 ? "FULL: ZERO FILL + FORMAT (SLOW)"
@@ -86,6 +108,45 @@ const char* SdFormatMenu::getSelectedDescription() {
 }
 
 // ============================================================================
+// SYSTEM CONTROL
+// ============================================================================
+
+void SdFormatMenu::stopEverything() {
+    if (systemStopped) return;
+    
+    // Stop FileServer if running
+    if (FileServer::isRunning()) {
+        FileServer::stop();
+    }
+    
+    // Stop background network reconnaissance
+    NetworkRecon::stop();
+    
+    // Full WiFi shutdown to reclaim heap
+    WiFi.disconnect(true);
+    WiFi.mode(WIFI_OFF);
+    delay(50);  // Allow WiFi stack to settle
+    
+    systemStopped = true;
+    barsHidden = true;  // Hide bars to save RAM
+    
+    Serial.println("[SD_FORMAT] System stopped for format operation");
+}
+
+void SdFormatMenu::doReboot() {
+    // Full-screen reboot message
+    M5.Display.fillScreen(TFT_BLACK);
+    M5.Display.setTextColor(getColorFG());
+    M5.Display.setTextDatum(middle_center);
+    M5.Display.setTextSize(2);
+    M5.Display.drawString("REBOOTING...", M5.Display.width() / 2, M5.Display.height() / 2);
+    
+    delay(REBOOT_DELAY_MS);
+    ESP.restart();
+    // Never reached
+}
+
+// ============================================================================
 // INPUT HANDLING
 // ============================================================================
 
@@ -98,18 +159,35 @@ void SdFormatMenu::handleInput() {
     if (keyWasPressed) return;
     keyWasPressed = true;
 
-    auto keys = M5Cardputer.Keyboard.keysState();
     bool up = M5Cardputer.Keyboard.isKeyPressed(';');
     bool down = M5Cardputer.Keyboard.isKeyPressed('.');
     bool back = M5Cardputer.Keyboard.isKeyPressed(KEY_BACKSPACE);
+    auto keys = M5Cardputer.Keyboard.keysState();
 
-    // ---- CONFIRM STATE ----
+    // ---- CONFIRM_ENTRY STATE ----
+    // Entry warning dialog: Y to enter, N to bail
+    if (state == State::CONFIRM_ENTRY) {
+        if (M5Cardputer.Keyboard.isKeyPressed('y') || M5Cardputer.Keyboard.isKeyPressed('Y')) {
+            // User confirmed entry - stop everything and proceed
+            stopEverything();
+            state = State::SELECT;
+            return;
+        }
+        if (M5Cardputer.Keyboard.isKeyPressed('n') || M5Cardputer.Keyboard.isKeyPressed('N') || back) {
+            // User cancelled - return to menu (nothing stopped)
+            active = false;
+            barsHidden = false;
+            Display::clearBottomOverlay();
+            return;
+        }
+        return;  // Ignore other keys
+    }
+
+    // ---- CONFIRM STATE (format confirmation) ----
     if (state == State::CONFIRM) {
         if (M5Cardputer.Keyboard.isKeyPressed('y') || M5Cardputer.Keyboard.isKeyPressed('Y')) {
-            Display::clearBottomOverlay();
             state = State::WORKING;
         } else if (M5Cardputer.Keyboard.isKeyPressed('n') || M5Cardputer.Keyboard.isKeyPressed('N') || back) {
-            Display::clearBottomOverlay();
             state = State::SELECT;
         }
         return;
@@ -117,8 +195,9 @@ void SdFormatMenu::handleInput() {
 
     // ---- RESULT STATE ----
     if (state == State::RESULT) {
-        if (keys.enter || back) {
-            hide();
+        // Any key triggers reboot
+        if (keys.enter || back || anyPressed) {
+            doReboot();  // Never returns
         }
         return;
     }
@@ -133,31 +212,19 @@ void SdFormatMenu::handleInput() {
             return;
         }
         if (keys.enter) {
-            Display::clearBottomOverlay();
+            // Check SD availability before confirming
+            if (!Config::isSDAvailable()) {
+                Display::notify(NoticeKind::WARNING, "SD NOT MOUNTED");
+                return;
+            }
             state = State::CONFIRM;
-            Display::setBottomOverlay("[Y] CONFIRM  [N] CANCEL");
             return;
         }
+        // Backspace in SELECT means exit - but we must reboot since system is stopped
         if (back) {
-            Display::clearBottomOverlay();
-            state = State::IDLE;
-            return;
+            doReboot();  // Never returns
         }
         return;
-    }
-
-    // ---- IDLE STATE ----
-    if (keys.enter) {
-        if (!Config::isSDAvailable()) {
-            Display::notify(NoticeKind::WARNING, "SD NOT MOUNTED");
-            return;
-        }
-        state = State::SELECT;
-        return;
-    }
-
-    if (back) {
-        hide();
     }
 }
 
@@ -179,7 +246,7 @@ void SdFormatMenu::onFormatProgress(const char* stage, uint8_t percent) {
 }
 
 // ============================================================================
-// DRAWING
+// DRAWING - Full screen (no bars) for maximum RAM
 // ============================================================================
 
 void SdFormatMenu::draw(M5Canvas& canvas) {
@@ -194,60 +261,67 @@ void SdFormatMenu::draw(M5Canvas& canvas) {
     // Title with icon (matching menu.cpp style)
     canvas.setTextDatum(top_center);
     canvas.setTextSize(2);
-    canvas.drawString("SD FORMAT SD", DISPLAY_W / 2, 2);
+    
+    // Different title based on state
+    if (state == State::CONFIRM_ENTRY) {
+        canvas.drawString("!! WARNING !!", DISPLAY_W / 2, 2);
+    } else {
+        canvas.drawString("SD FORMAT SD", DISPLAY_W / 2, 2);
+    }
     canvas.drawLine(10, 20, DISPLAY_W - 10, 20, fg);
 
-    if (state == State::WORKING) {
-        drawWorking(canvas);
-        return;
-    }
-
-    if (state == State::RESULT && hasResult) {
-        drawResult(canvas);
-    } else if (state == State::SELECT) {
-        drawSelect(canvas);
-    } else {
-        drawIdle(canvas);
-    }
-
-    if (state == State::CONFIRM) {
-        drawConfirm(canvas);
+    // Dispatch to state-specific drawing
+    switch (state) {
+        case State::CONFIRM_ENTRY:
+            drawConfirmEntry(canvas);
+            break;
+        case State::SELECT:
+            drawSelect(canvas);
+            break;
+        case State::CONFIRM:
+            // Draw SELECT as background, then CONFIRM overlay
+            drawSelect(canvas);
+            drawConfirm(canvas);
+            break;
+        case State::WORKING:
+            drawWorking(canvas);
+            break;
+        case State::RESULT:
+            drawResult(canvas);
+            break;
     }
 }
 
-void SdFormatMenu::drawIdle(M5Canvas& canvas) {
+void SdFormatMenu::drawConfirmEntry(M5Canvas& canvas) {
     uint16_t fg = getColorFG();
     uint16_t bg = getColorBG();
 
-    canvas.setTextDatum(top_left);
-    canvas.setTextSize(2);
-
-    int y = 26;
-    const int lineH = 18;
-
-    // SD Status row (highlighted style)
-    canvas.drawString("SD:", 8, y);
-    const char* sdStatus = Config::isSDAvailable() ? "MOUNTED" : "NOT FOUND";
-    canvas.setTextDatum(top_right);
-    canvas.drawString(sdStatus, DISPLAY_W - 8, y);
-    canvas.setTextDatum(top_left);
-    y += lineH;
-
-    // Separator
-    canvas.drawLine(20, y + 2, DISPLAY_W - 20, y + 2, fg);
-    y += 10;
-
-    // Info text
-    canvas.setTextSize(1);
-    canvas.drawString("ERASES ALL DATA ON SD", 8, y);
-    y += 12;
-    canvas.drawString("FAT32 QUICK OR FULL", 8, y);
-    y += 16;
-
-    // Controls hint
-    canvas.setTextSize(2);
     canvas.setTextDatum(top_center);
-    canvas.drawString("ENTER=START", DISPLAY_W / 2, y);
+    int centerX = DISPLAY_W / 2;
+    int y = 26;
+
+    // Warning message
+    canvas.setTextSize(1);
+    canvas.drawString("THIS WILL STOP ALL", centerX, y);
+    y += 12;
+    canvas.drawString("SYSTEM OPERATIONS:", centerX, y);
+    y += 14;
+    
+    canvas.drawString("- WIFI SHUTDOWN", centerX, y);
+    y += 10;
+    canvas.drawString("- NETWORK SCAN STOP", centerX, y);
+    y += 10;
+    canvas.drawString("- FILESERVER STOP", centerX, y);
+    y += 14;
+    
+    canvas.setTextSize(2);
+    canvas.setTextColor(fg);
+    canvas.drawString("REBOOT REQUIRED", centerX, y);
+    y += 20;
+    
+    // Controls
+    canvas.setTextSize(1);
+    canvas.drawString("[Y] ENTER  [N] CANCEL", centerX, y);
 }
 
 void SdFormatMenu::drawSelect(M5Canvas& canvas) {
@@ -373,8 +447,13 @@ void SdFormatMenu::drawResult(M5Canvas& canvas) {
     }
 
     y += 8;
+    
+    // Reboot notice
     canvas.setTextSize(2);
-    canvas.drawString("ENTER TO EXIT", DISPLAY_W / 2, y);
+    canvas.drawString("PRESS ANY KEY", DISPLAY_W / 2, y);
+    y += 18;
+    canvas.setTextSize(1);
+    canvas.drawString("TO REBOOT DEVICE", DISPLAY_W / 2, y);
 }
 
 void SdFormatMenu::drawConfirm(M5Canvas& canvas) {

@@ -31,6 +31,31 @@ constexpr uint32_t kWdtResetInterval = 100;    // Reset WDT every N chunks
 constexpr uint8_t  kMaxRemountRetries = 3;     // Retries for SD remount
 constexpr uint32_t kRemountBaseDelayMs = 80;   // Base delay for remount
 constexpr uint32_t kSyncSettleMs = 50;         // Settle time after CTRL_SYNC
+constexpr uint32_t kSpeedSampleChunks = 10;    // Chunks to sample for speed estimate
+
+// ============================================================================
+// ERASE PROGRESS TRACKING (static, no heap)
+// ============================================================================
+struct EraseProgress {
+    uint32_t startMs;
+    uint32_t bytesPerSecond;
+    char stageWithEta[24];  // "ERASING ~MM:SS"
+};
+static EraseProgress eraseProgress;
+
+void formatTimeRemaining(uint32_t seconds, char* buf, size_t bufSize) {
+    if (seconds < 60) {
+        snprintf(buf, bufSize, "~%lus", (unsigned long)seconds);
+    } else if (seconds < 3600) {
+        snprintf(buf, bufSize, "~%lu:%02lu", 
+                 (unsigned long)(seconds / 60), 
+                 (unsigned long)(seconds % 60));
+    } else {
+        snprintf(buf, bufSize, "~%luh%02lum", 
+                 (unsigned long)(seconds / 3600), 
+                 (unsigned long)((seconds % 3600) / 60));
+    }
+}
 
 SDFormat::Result makeResult(bool success, bool usedFallback, const char* msg) {
     SDFormat::Result res{};
@@ -178,12 +203,40 @@ bool fullErase(uint8_t pdrv, const DiskGeometry& geo, SDFormat::ProgressCallback
     }
     if (targetSectors == 0) return false;
 
+    // ========================================================================
+    // PHASE 1: Try hardware TRIM/ERASE (10-100x faster if supported)
+    // ========================================================================
+#ifdef CTRL_TRIM
+    reportProgress(cb, "TRIM", 0);
+    DWORD trimRange[2] = {0, static_cast<DWORD>(targetSectors - 1)};
+    DRESULT trimRes = disk_ioctl(pdrv, CTRL_TRIM, trimRange);
+    if (trimRes == RES_OK) {
+        // Hardware erase succeeded - fast path!
+        reportProgress(cb, "TRIM", 100);
+        disk_ioctl(pdrv, CTRL_SYNC, nullptr);
+        delay(kSyncSettleMs);
+        return true;
+    }
+    // TRIM not supported or failed - fall back to zero-fill
+#endif
+
+    // ========================================================================
+    // PHASE 2: Zero-fill fallback with ETA tracking
+    // ========================================================================
+    
+    // Initialize progress tracking
+    eraseProgress.startMs = millis();
+    eraseProgress.bytesPerSecond = 0;
+    eraseProgress.stageWithEta[0] = '\0';
+
     // Erase buffer - explicitly zero to avoid stale data
     static uint8_t zeroBuf[4096];
     memset(zeroBuf, 0, sizeof(zeroBuf));
 
     const uint32_t sectorsPerChunk = static_cast<uint32_t>(sizeof(zeroBuf) / geo.sectorSize);
     if (sectorsPerChunk == 0) return false;
+    
+    const uint32_t bytesPerChunk = sectorsPerChunk * geo.sectorSize;
 
     uint64_t written = 0;
     uint8_t lastPercent = 255;
@@ -204,11 +257,33 @@ bool fullErase(uint8_t pdrv, const DiskGeometry& geo, SDFormat::ProgressCallback
         written += todo;
         chunkCount++;
 
-        // Progress update
+        // Calculate write speed after sampling period
+        if (chunkCount == kSpeedSampleChunks) {
+            uint32_t elapsedMs = millis() - eraseProgress.startMs;
+            if (elapsedMs > 0) {
+                uint64_t bytesWritten = static_cast<uint64_t>(chunkCount) * bytesPerChunk;
+                eraseProgress.bytesPerSecond = static_cast<uint32_t>((bytesWritten * 1000ULL) / elapsedMs);
+            }
+        }
+
+        // Progress update with ETA
         uint8_t percent = static_cast<uint8_t>((written * 100) / targetSectors);
         if (percent != lastPercent) {
             lastPercent = percent;
-            reportProgress(cb, "ERASING", percent);
+            
+            // Build stage string with ETA if we have speed data
+            if (eraseProgress.bytesPerSecond > 0 && written < targetSectors) {
+                uint64_t bytesRemaining = (targetSectors - written) * geo.sectorSize;
+                uint32_t secondsRemaining = static_cast<uint32_t>(bytesRemaining / eraseProgress.bytesPerSecond);
+                
+                char etaBuf[12];
+                formatTimeRemaining(secondsRemaining, etaBuf, sizeof(etaBuf));
+                snprintf(eraseProgress.stageWithEta, sizeof(eraseProgress.stageWithEta), 
+                         "ERASE %s", etaBuf);
+                reportProgress(cb, eraseProgress.stageWithEta, percent);
+            } else {
+                reportProgress(cb, "ERASING", percent);
+            }
         }
 
         // Prevent watchdog timeout during long operations

@@ -9,6 +9,7 @@
 #include "../web/fileserver.h"
 #include <M5Cardputer.h>
 #include <WiFi.h>
+#include <esp_task_wdt.h>
 
 // ============================================================================
 // CONSTANTS
@@ -42,7 +43,7 @@ SDFormat::Result SdFormatMenu::lastResult = {};
 bool SdFormatMenu::hasResult = false;
 SDFormat::FormatMode SdFormatMenu::formatMode = SDFormat::FormatMode::QUICK;
 uint8_t SdFormatMenu::progressPercent = 0;
-char SdFormatMenu::progressStage[16] = "";
+char SdFormatMenu::progressStage[32] = "";
 uint8_t SdFormatMenu::hintIndex = 0;
 bool SdFormatMenu::barsHidden = false;
 bool SdFormatMenu::systemStopped = false;
@@ -222,6 +223,9 @@ void SdFormatMenu::handleInput() {
         }
         // Backspace in SELECT means exit - but we must reboot since system is stopped
         if (back) {
+            // Show warning before reboot - user may have pressed by accident
+            Display::notify(NoticeKind::WARNING, "REBOOT REQUIRED", 1500);
+            delay(1500);
             doReboot();  // Never returns
         }
         return;
@@ -235,6 +239,9 @@ void SdFormatMenu::startFormat() {
 }
 
 void SdFormatMenu::onFormatProgress(const char* stage, uint8_t percent) {
+    // Reset watchdog - SPI transfers during display update can take time
+    esp_task_wdt_reset();
+    
     progressPercent = percent;
     if (stage && stage[0]) {
         strncpy(progressStage, stage, sizeof(progressStage) - 1);

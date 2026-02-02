@@ -32,7 +32,7 @@ private:
     static bool hasResult;
     static SDFormat::FormatMode formatMode;
     static uint8_t progressPercent;
-    static char progressStage[16];
+    static char progressStage[32];  // Increased from 16 for ETA strings like "ERASE ~1h23m"
     
     // System state
     static bool barsHidden;      // True when bars are hidden (saves RAM)

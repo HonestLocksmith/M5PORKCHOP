@@ -268,6 +268,10 @@ void Display::update() {
     
     if (!barsHidden) {
         drawTopBar();
+    } else {
+        // Clear bar sprites when hidden to prevent stale content on push
+        topBar.fillSprite(COLOR_BG);
+        bottomBar.fillSprite(COLOR_BG);
     }
 
     PorkchopMode mode = porkchop.getMode();

@@ -32,6 +32,7 @@ constexpr uint8_t  kMaxRemountRetries = 3;     // Retries for SD remount
 constexpr uint32_t kRemountBaseDelayMs = 80;   // Base delay for remount
 constexpr uint32_t kSyncSettleMs = 50;         // Settle time after CTRL_SYNC
 constexpr uint32_t kSpeedSampleChunks = 10;    // Chunks to sample for speed estimate
+constexpr uint32_t kProgressIntervalBytes = 512 * 1024;  // Update UI every 512KB (not per-percent)
 
 // ============================================================================
 // ERASE PROGRESS TRACKING (static, no heap)
@@ -241,6 +242,10 @@ bool fullErase(uint8_t pdrv, const DiskGeometry& geo, SDFormat::ProgressCallback
     uint64_t written = 0;
     uint8_t lastPercent = 255;
     uint32_t chunkCount = 0;
+    uint64_t lastProgressBytes = 0;  // Track bytes for interval-based updates
+    
+    // Immediate feedback - show 0% right away
+    reportProgress(cb, "ERASING", 0);
 
     while (written < targetSectors) {
         uint32_t todo = sectorsPerChunk;
@@ -256,20 +261,26 @@ bool fullErase(uint8_t pdrv, const DiskGeometry& geo, SDFormat::ProgressCallback
 
         written += todo;
         chunkCount++;
+        
+        uint64_t writtenBytes = written * geo.sectorSize;
 
         // Calculate write speed after sampling period
         if (chunkCount == kSpeedSampleChunks) {
             uint32_t elapsedMs = millis() - eraseProgress.startMs;
             if (elapsedMs > 0) {
-                uint64_t bytesWritten = static_cast<uint64_t>(chunkCount) * bytesPerChunk;
-                eraseProgress.bytesPerSecond = static_cast<uint32_t>((bytesWritten * 1000ULL) / elapsedMs);
+                eraseProgress.bytesPerSecond = static_cast<uint32_t>((writtenBytes * 1000ULL) / elapsedMs);
             }
         }
 
-        // Progress update with ETA
+        // Progress update: every 512KB OR when percent changes (whichever is more frequent)
+        // This prevents UI freeze during long operations
         uint8_t percent = static_cast<uint8_t>((written * 100) / targetSectors);
-        if (percent != lastPercent) {
+        bool intervalUpdate = (writtenBytes - lastProgressBytes) >= kProgressIntervalBytes;
+        bool percentUpdate = (percent != lastPercent);
+        
+        if (intervalUpdate || percentUpdate) {
             lastPercent = percent;
+            lastProgressBytes = writtenBytes;
             
             // Build stage string with ETA if we have speed data
             if (eraseProgress.bytesPerSecond > 0 && written < targetSectors) {

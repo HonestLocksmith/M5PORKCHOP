@@ -1,4 +1,5 @@
 // SD card formatting implementation
+// Reliability-hardened version with retry logic and dual FAT tables
 
 #include "sd_format.h"
 #include "config.h"
@@ -6,6 +7,7 @@
 #include "sdlog.h"
 #include "../web/fileserver.h"
 #include <SD.h>
+#include <esp_task_wdt.h>
 
 // FATFS (ESP-IDF) headers may not exist in all Arduino builds.
 // Guard format APIs to avoid compile errors.
@@ -19,6 +21,17 @@
 #endif
 
 namespace {
+
+// ============================================================================
+// RELIABILITY CONSTANTS
+// ============================================================================
+constexpr uint8_t  kMaxWriteRetries = 3;       // Retries per sector chunk
+constexpr uint16_t kRetryDelayMs = 10;         // Delay between retries
+constexpr uint32_t kWdtResetInterval = 100;    // Reset WDT every N chunks
+constexpr uint8_t  kMaxRemountRetries = 3;     // Retries for SD remount
+constexpr uint32_t kRemountBaseDelayMs = 80;   // Base delay for remount
+constexpr uint32_t kSyncSettleMs = 50;         // Settle time after CTRL_SYNC
+
 SDFormat::Result makeResult(bool success, bool usedFallback, const char* msg) {
     SDFormat::Result res{};
     res.success = success;
@@ -56,6 +69,7 @@ DWORD pickAllocationUnitBytes(uint64_t cardBytes) {
         capped = kMaxFormatBytes;
     }
 
+    // Standard FAT32 allocation unit recommendations
     if (capped <= 8 * kGiB) return 4 * 1024;
     if (capped <= 16 * kGiB) return 8 * 1024;
     if (capped <= 32 * kGiB) return 16 * 1024;
@@ -140,6 +154,20 @@ bool partitionToMax32GiB(uint8_t pdrv, DWORD sectorSize, uint64_t cardBytes, uin
 }
 #endif
 
+// Write sectors with retry logic for transient failures
+bool writeWithRetry(uint8_t pdrv, const uint8_t* buf, DWORD sector, UINT count) {
+    for (uint8_t attempt = 0; attempt < kMaxWriteRetries; attempt++) {
+        DRESULT res = disk_write(pdrv, buf, sector, count);
+        if (res == RES_OK) {
+            return true;
+        }
+        // Transient failure - wait and retry
+        delay(kRetryDelayMs);
+        yield();
+    }
+    return false;  // All retries exhausted
+}
+
 bool fullErase(uint8_t pdrv, const DiskGeometry& geo, SDFormat::ProgressCallback cb) {
     if (geo.sectorSize == 0 || geo.sectorCount == 0) return false;
 
@@ -150,43 +178,70 @@ bool fullErase(uint8_t pdrv, const DiskGeometry& geo, SDFormat::ProgressCallback
     }
     if (targetSectors == 0) return false;
 
-    static uint8_t zeroBuf[4096] = {};
+    // Erase buffer - explicitly zero to avoid stale data
+    static uint8_t zeroBuf[4096];
+    memset(zeroBuf, 0, sizeof(zeroBuf));
+
     const uint32_t sectorsPerChunk = static_cast<uint32_t>(sizeof(zeroBuf) / geo.sectorSize);
     if (sectorsPerChunk == 0) return false;
 
     uint64_t written = 0;
     uint8_t lastPercent = 255;
+    uint32_t chunkCount = 0;
+
     while (written < targetSectors) {
         uint32_t todo = sectorsPerChunk;
         if (written + todo > targetSectors) {
             todo = static_cast<uint32_t>(targetSectors - written);
         }
-        if (disk_write(pdrv, zeroBuf, static_cast<DWORD>(written), static_cast<UINT>(todo)) != RES_OK) {
+
+        // Write with retry logic for reliability
+        if (!writeWithRetry(pdrv, zeroBuf, static_cast<DWORD>(written), static_cast<UINT>(todo))) {
+            // All retries failed - report failure
             return false;
         }
+
         written += todo;
+        chunkCount++;
+
+        // Progress update
         uint8_t percent = static_cast<uint8_t>((written * 100) / targetSectors);
         if (percent != lastPercent) {
             lastPercent = percent;
             reportProgress(cb, "ERASING", percent);
         }
+
+        // Prevent watchdog timeout during long operations
         yield();
+        if ((chunkCount % kWdtResetInterval) == 0) {
+            esp_task_wdt_reset();
+        }
     }
 
+    // Ensure all writes are flushed to card
     disk_ioctl(pdrv, CTRL_SYNC, nullptr);
+    delay(kSyncSettleMs);  // Allow card controller to settle
+
     return true;
 }
 
 bool fatfsFormat(uint8_t pdrv, uint64_t cardBytes, DWORD sectorSize) {
+    // Cap card size to FAT32 practical limit if not partitioning
+    uint64_t effectiveBytes = cardBytes;
+    if (effectiveBytes > kMaxFormatBytes) {
+        effectiveBytes = kMaxFormatBytes;
+    }
+
     // FATFS format uses logical drive strings like "0:"
     char drive[3] = {static_cast<char>('0' + pdrv), ':', '\0'};
-    DWORD auSize = pickAllocationUnitBytes(cardBytes);
+    DWORD auSize = pickAllocationUnitBytes(effectiveBytes);
+
 #if defined(MKFS_PARM)
     MKFS_PARM opt{};
     opt.fmt = FM_FAT32;
-    opt.n_fat = 1;
-    opt.align = 0;
-    opt.n_root = 0;
+    opt.n_fat = 2;      // DUAL FAT TABLES for redundancy (critical fix!)
+    opt.align = 0;      // Auto-align to card erase block
+    opt.n_root = 0;     // Default root directory entries
     opt.au_size = auSize;
 #else
     // Older FatFs uses a BYTE for format flags (FDISK not supported here).
@@ -194,21 +249,43 @@ bool fatfsFormat(uint8_t pdrv, uint64_t cardBytes, DWORD sectorSize) {
 #endif
 
     static uint8_t workbuf[4096];
+    memset(workbuf, 0, sizeof(workbuf));
+
 #if FF_MULTI_PARTITION
     if (cardBytes > kMaxFormatBytes) {
         if (!partitionToMax32GiB(pdrv, sectorSize, cardBytes, workbuf, sizeof(workbuf))) {
             return false;
         }
+        // Re-zero workbuf after partitioning
+        memset(workbuf, 0, sizeof(workbuf));
     }
 #endif
+
 #if defined(MKFS_PARM)
     FRESULT fr = f_mkfs(drive, &opt, workbuf, sizeof(workbuf));
 #else
     FRESULT fr = f_mkfs(drive, opt, auSize, workbuf, sizeof(workbuf));
 #endif
+
     return fr == FR_OK;
 }
-#endif
+
+// Attempt SD remount with exponential backoff
+bool remountWithRetry() {
+    for (uint8_t attempt = 0; attempt < kMaxRemountRetries; attempt++) {
+        uint32_t delayMs = kRemountBaseDelayMs << attempt;  // 80, 160, 320ms
+        delay(delayMs);
+
+        if (Config::reinitSD()) {
+            return true;
+        }
+
+        yield();
+    }
+    return false;
+}
+
+#endif // SD_FORMAT_HAS_FF
 } // namespace
 
 namespace SDFormat {
@@ -261,11 +338,13 @@ Result formatCard(FormatMode mode, bool allowFallback, ProgressCallback cb) {
     }
 
     sdcard_uninit(pdrv);
-    delay(80);
-    if (!Config::reinitSD()) {
+
+    // Remount with retry and exponential backoff
+    if (!remountWithRetry()) {
         SDLog::setEnabled(logWasEnabled);
         return makeResult(false, false, "REMOUNT FAIL");
     }
+
     SDLayout::setUseNewLayout(true);
     SDLayout::ensureDirs();
     reportProgress(cb, "FORMAT", 100);
@@ -273,6 +352,7 @@ Result formatCard(FormatMode mode, bool allowFallback, ProgressCallback cb) {
     return makeResult(true, false, mode == FormatMode::FULL ? "FULL OK" : "FORMAT OK");
 #endif
 
+    // Fallback path when FATFS not available
     if (allowFallback && Config::isSDAvailable() && wipePorkchopLayout()) {
         reportProgress(cb, "WIPE", 100);
         SDLog::setEnabled(logWasEnabled);

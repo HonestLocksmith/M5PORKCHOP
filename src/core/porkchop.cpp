@@ -25,6 +25,7 @@
 #include "../modes/spectrum.h"
 #include "../modes/pigsync_client.h"
 #include "../modes/bacon.h"
+#include "../modes/charging.h"
 #include "../web/fileserver.h"
 #include "../audio/sfx.h"
 #include "config.h"
@@ -64,6 +65,7 @@ static const char* modeToString(PorkchopMode mode) {
         case PorkchopMode::PIGSYNC_DEVICE_SELECT: return "PIGSYNC_DEVICE_SELECT";
         case PorkchopMode::BACON_MODE: return "BACON";
         case PorkchopMode::SD_FORMAT: return "SD_FORMAT";
+        case PorkchopMode::CHARGING: return "CHARGING";
         case PorkchopMode::ABOUT: return "ABOUT";
         default: return "UNKNOWN";
     }
@@ -219,6 +221,7 @@ void Porkchop::init() {
             case 18: setMode(PorkchopMode::BACON_MODE); break;
             case 19: setMode(PorkchopMode::DIAGNOSTICS); break;
             case 20: setMode(PorkchopMode::SD_FORMAT); break;
+            case 21: setMode(PorkchopMode::CHARGING); break;
         }
     });
 
@@ -406,6 +409,9 @@ void Porkchop::setMode(PorkchopMode mode) {
         case PorkchopMode::BACON_MODE:
             BaconMode::stop();
             break;
+        case PorkchopMode::CHARGING:
+            ChargingMode::stop();
+            break;
         default:
             break;
     }
@@ -514,6 +520,11 @@ void Porkchop::setMode(PorkchopMode mode) {
             break;
         case PorkchopMode::ABOUT:
             Display::resetAboutState();
+            break;
+        case PorkchopMode::CHARGING:
+            SDLog::log("PORK", "Mode: CHARGING");
+            ChargingMode::init();
+            ChargingMode::start();
             break;
         default:
             break;
@@ -764,6 +775,10 @@ void Porkchop::handleInput() {
                 case '2': // PIGSYNC device select
                     setMode(PorkchopMode::PIGSYNC_DEVICE_SELECT);
                     break;
+                case 'c': // Charging mode
+                case 'C':
+                    setMode(PorkchopMode::CHARGING);
+                    break;
             }
         }
         yield(); // Allow other tasks to run after processing all keys
@@ -946,6 +961,13 @@ void Porkchop::updateMode() {
             if (!PigSyncMode::isRunning()) {
                 // User exited, go back to menu
                 setMode(PorkchopMode::MENU);
+            }
+            break;
+        case PorkchopMode::CHARGING:
+            ChargingMode::update();
+            // Auto-exit when unplugged
+            if (!ChargingMode::isRunning()) {
+                setMode(PorkchopMode::IDLE);
             }
             break;
         default:

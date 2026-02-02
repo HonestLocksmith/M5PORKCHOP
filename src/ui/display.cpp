@@ -25,6 +25,7 @@
 #include "../modes/pigsync_client.h"
 #include "../modes/pigsync_protocol.h"
 #include "../modes/bacon.h"
+#include "../modes/charging.h"
 #include "../gps/gps.h"
 #include "../web/fileserver.h"
 #include "menu.h"
@@ -397,6 +398,9 @@ void Display::update() {
         case PorkchopMode::SD_FORMAT:
             SdFormatMenu::draw(mainCanvas);
             break;
+        case PorkchopMode::CHARGING:
+            ChargingMode::draw(mainCanvas);
+            break;
     }
     
     // Draw toast if active and not expired (show for 2 seconds)
@@ -628,6 +632,10 @@ void Display::drawTopBar() {
         case PorkchopMode::SD_FORMAT:
             snprintf(modeBuf, sizeof(modeBuf), "SD FORMAT");
             modeColor = COLOR_WARNING;
+            break;
+        case PorkchopMode::CHARGING:
+            snprintf(modeBuf, sizeof(modeBuf), "CHARGING");
+            modeColor = COLOR_SUCCESS;
             break;
     }
     

@@ -187,8 +187,8 @@
     OINK bounce: switching OINK -> IDLE can reclaim heap.
     it's percussive maintenance. for memory.
     
-    this feeds the HEALTH BAR. (see section 3.4).
-    if health drops, the pig can't talk to the cloud.
+    this feeds the  BAR. (see section 3.4).
+    if  drops, the pig can't talk to the cloud.
     fragmentation is damage. entropy is the enemy.
 
     THE EVENT BUS:

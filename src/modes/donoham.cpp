@@ -20,6 +20,7 @@
 #include "../piglet/avatar.h"
 #include <SD.h>
 #include <esp_heap_caps.h>
+#include <atomic>
 
 // PCAP file format structures (same as OINK for WPA-SEC compatibility)
 #pragma pack(push, 1)
@@ -76,8 +77,8 @@ uint32_t DoNoHamMode::lastStatsDecay = 0;
 uint8_t DoNoHamMode::lastCycleActivity = 0;
 uint32_t DoNoHamMode::adaptiveDwellUntil = 0;
 
-// Guard flag for race condition prevention
-static volatile bool dnhBusy = false;
+// Guard flag for race condition prevention (atomic for thread safety)
+static std::atomic<bool> dnhBusy{false};
 
 // Protect pending handshake payload from partial writes in callback
 static portMUX_TYPE pendingHandshakeMux = portMUX_INITIALIZER_UNLOCKED;
@@ -1285,6 +1286,11 @@ int DoNoHamMode::findNetwork(const uint8_t* bssid) {
 }
 
 int DoNoHamMode::findOrCreatePMKID(const uint8_t* bssid) {
+    // Null guard
+    if (!bssid) {
+        return -1;
+    }
+    
     // Find existing
     for (size_t i = 0; i < pmkids.size(); i++) {
         if (memcmp(pmkids[i].bssid, bssid, 6) == 0) {
@@ -1296,18 +1302,32 @@ int DoNoHamMode::findOrCreatePMKID(const uint8_t* bssid) {
         if (pmkids.size() >= pmkids.capacity()) {
             size_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
             if (largest < DNH_PMKID_ALLOC_MIN_BLOCK) {
+                Serial.printf("[DNH] PMKID add blocked: fragmented heap (largest=%u)\n", largest);
                 return -1;
             }
         }
         CapturedPMKID p = {};
         memcpy(p.bssid, bssid, 6);
-        pmkids.push_back(p);
+        p.saveAttempts = 0;
+        
+        // OOM guard
+        try {
+            pmkids.push_back(p);
+        } catch (...) {
+            Serial.println("[DNH] OOM in findOrCreatePMKID - push_back failed");
+            return -1;
+        }
         return pmkids.size() - 1;
     }
     return -1;
 }
 
 int DoNoHamMode::findOrCreateHandshake(const uint8_t* bssid, const uint8_t* station) {
+    // Null guard - prevent crash from corrupted callback data
+    if (!bssid || !station) {
+        return -1;
+    }
+    
     // Find existing with matching BSSID and station
     for (size_t i = 0; i < handshakes.size(); i++) {
         if (memcmp(handshakes[i].bssid, bssid, 6) == 0 &&
@@ -1317,15 +1337,23 @@ int DoNoHamMode::findOrCreateHandshake(const uint8_t* bssid, const uint8_t* stat
     }
     // Create new
     if (handshakes.size() < DNH_MAX_HANDSHAKES) {
-        if (ESP.getFreeHeap() < HeapPolicy::kMinHeapForHandshakeAdd) {
+        // Check free heap before attempting allocation
+        size_t freeHeap = ESP.getFreeHeap();
+        if (freeHeap < HeapPolicy::kMinHeapForHandshakeAdd) {
+            Serial.printf("[DNH] Handshake add blocked: low heap (%u)\n", freeHeap);
             return -1;
         }
+        
+        // Check largest contiguous block if vector needs to grow
         if (handshakes.size() >= handshakes.capacity()) {
             size_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
             if (largest < DNH_HANDSHAKE_ALLOC_MIN_BLOCK) {
+                Serial.printf("[DNH] Handshake add blocked: fragmented heap (largest=%u)\n", largest);
                 return -1;
             }
         }
+        
+        // Prepare handshake struct before push to minimize exception window
         CapturedHandshake hs = {};
         memcpy(hs.bssid, bssid, 6);
         memcpy(hs.station, station, 6);
@@ -1333,9 +1361,20 @@ int DoNoHamMode::findOrCreateHandshake(const uint8_t* bssid, const uint8_t* stat
         hs.firstSeen = millis();
         hs.lastSeen = hs.firstSeen;
         hs.saved = false;
+        hs.saveAttempts = 0;
         hs.beaconData = nullptr;
         hs.beaconLen = 0;
-        handshakes.push_back(hs);
+        
+        // OOM guard: wrap push_back in try-catch to prevent heap corruption propagation
+        try {
+            handshakes.push_back(hs);
+        } catch (const std::bad_alloc&) {
+            Serial.println("[DNH] OOM in findOrCreateHandshake - push_back failed");
+            return -1;
+        } catch (...) {
+            Serial.println("[DNH] Exception in findOrCreateHandshake - push_back failed");
+            return -1;
+        }
         return handshakes.size() - 1;
     }
     return -1;

@@ -36,6 +36,26 @@ PersonalityConfig Config::personalityConfig;
 bool Config::initialized = false;
 static bool sdAvailable = false;
 
+static uint16_t clampU16(uint32_t value, uint16_t minVal, uint16_t maxVal) {
+    if (value < minVal) return minVal;
+    if (value > maxVal) return maxVal;
+    return static_cast<uint16_t>(value);
+}
+
+static int8_t clampI8(int value, int8_t minVal, int8_t maxVal) {
+    if (value < minVal) return minVal;
+    if (value > maxVal) return maxVal;
+    return static_cast<int8_t>(value);
+}
+
+static void sanitizeWiFiConfig(WiFiConfig& cfg) {
+    cfg.channelHopInterval = clampU16(cfg.channelHopInterval, 50, 2000);
+    cfg.spectrumHopInterval = clampU16(cfg.spectrumHopInterval, 50, 2000);
+    cfg.spectrumMinRssi = clampI8(cfg.spectrumMinRssi, -95, -30);
+    if (cfg.spectrumTopN > 100) cfg.spectrumTopN = 100;
+    cfg.spectrumStaleMs = clampU16(cfg.spectrumStaleMs, 1000, 20000);
+}
+
 static void ensureSdSpiReady() {
     // Re-init SD SPI bus cleanly
     if (sdSpiBegun) {
@@ -263,13 +283,21 @@ bool Config::load() {
 
     // WiFi config
     if (doc["wifi"].is<JsonObject>()) {
-        wifiConfig.channelHopInterval = doc["wifi"]["channelHopInterval"] | 150;
+        int hopInterval = doc["wifi"]["channelHopInterval"] | 150;
+        wifiConfig.channelHopInterval = clampU16(hopInterval, 50, 2000);
+        int spectrumHop = doc["wifi"]["spectrumHopInterval"] | 150;
+        wifiConfig.spectrumHopInterval = clampU16(spectrumHop, 50, 2000);
         wifiConfig.lockTime = doc["wifi"]["lockTime"] | 12000;
         wifiConfig.enableDeauth = doc["wifi"]["enableDeauth"] | true;
         wifiConfig.randomizeMAC = doc["wifi"]["randomizeMAC"] | true;
-        wifiConfig.spectrumMinRssi = doc["wifi"]["spectrumMinRssi"] | -95;
-        wifiConfig.spectrumTopN = doc["wifi"]["spectrumTopN"] | 0;
-        wifiConfig.spectrumStaleMs = doc["wifi"]["spectrumStaleMs"] | 5000;
+        int minRssi = doc["wifi"]["spectrumMinRssi"] | -95;
+        wifiConfig.spectrumMinRssi = clampI8(minRssi, -95, -30);
+        int topN = doc["wifi"]["spectrumTopN"] | 0;
+        if (topN < 0) topN = 0;
+        if (topN > 100) topN = 100;
+        wifiConfig.spectrumTopN = static_cast<uint8_t>(topN);
+        int staleMs = doc["wifi"]["spectrumStaleMs"] | 5000;
+        wifiConfig.spectrumStaleMs = clampU16(staleMs, 1000, 20000);
         wifiConfig.spectrumCollapseSsid = doc["wifi"]["spectrumCollapseSsid"] | false;
         const char* ssid = doc["wifi"]["otaSSID"] | "";
         strncpy(wifiConfig.otaSSID, ssid, sizeof(wifiConfig.otaSSID) - 1);
@@ -288,6 +316,7 @@ bool Config::load() {
         strncpy(wifiConfig.wigleApiToken, apiToken, sizeof(wifiConfig.wigleApiToken) - 1);
         wifiConfig.wigleApiToken[sizeof(wifiConfig.wigleApiToken) - 1] = '\0';
     }
+    sanitizeWiFiConfig(wifiConfig);
 
     // BLE config (PIGGY BLUES)
     if (doc["ble"].is<JsonObject>()) {
@@ -404,6 +433,7 @@ bool Config::save() {
 
     // WiFi config
     doc["wifi"]["channelHopInterval"] = wifiConfig.channelHopInterval;
+    doc["wifi"]["spectrumHopInterval"] = wifiConfig.spectrumHopInterval;
     doc["wifi"]["lockTime"] = wifiConfig.lockTime;
     doc["wifi"]["enableDeauth"] = wifiConfig.enableDeauth;
     doc["wifi"]["randomizeMAC"] = wifiConfig.randomizeMAC;
@@ -441,6 +471,7 @@ bool Config::createDefaultConfig() {
     gpsConfig = GPSConfig();
     mlConfig = MLConfig();
     wifiConfig = WiFiConfig();
+    sanitizeWiFiConfig(wifiConfig);
     bleConfig = BLEConfig();
     return true;
 }
@@ -471,6 +502,7 @@ void Config::setML(const MLConfig& cfg) {
 
 void Config::setWiFi(const WiFiConfig& cfg) {
     wifiConfig = cfg;
+    sanitizeWiFiConfig(wifiConfig);
     save();
 }
 

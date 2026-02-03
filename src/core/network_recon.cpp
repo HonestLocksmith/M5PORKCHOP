@@ -33,6 +33,7 @@ static uint32_t lastCleanupTime = 0;
 static uint32_t startTime = 0;
 static volatile uint32_t packetCount = 0;
 static std::atomic<bool> busy{false};  // [BUG3 FIX] Atomic for cross-core visibility
+static std::atomic<uint32_t> hopIntervalOverrideMs{0};
 static size_t heapLargestAtStart = 0;
 static bool heapStabilized = false;
 
@@ -51,7 +52,8 @@ static const uint32_t CLEANUP_INTERVAL_MS = 5000;
 static const uint32_t CLIENT_BITMAP_RESET_MS = 30000;
 
 static uint32_t getHopIntervalMsInternal() {
-    uint32_t interval = Config::wifi().channelHopInterval;
+    uint32_t overrideMs = hopIntervalOverrideMs.load();
+    uint32_t interval = overrideMs > 0 ? overrideMs : Config::wifi().channelHopInterval;
     if (interval < 50) interval = 50;
     if (interval > 2000) interval = 2000;
     return interval;
@@ -941,6 +943,20 @@ uint8_t getCurrentChannel() {
 
 uint32_t getHopIntervalMs() {
     return getHopIntervalMsInternal();
+}
+
+void setHopIntervalOverride(uint32_t intervalMs) {
+    if (intervalMs == 0) {
+        hopIntervalOverrideMs.store(0);
+        return;
+    }
+    if (intervalMs < 50) intervalMs = 50;
+    if (intervalMs > 2000) intervalMs = 2000;
+    hopIntervalOverrideMs.store(intervalMs);
+}
+
+void clearHopIntervalOverride() {
+    hopIntervalOverrideMs.store(0);
 }
 
 uint32_t getPacketCount() {

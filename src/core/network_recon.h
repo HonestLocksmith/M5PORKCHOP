@@ -91,6 +91,12 @@ uint8_t getCurrentChannel();
 uint32_t getHopIntervalMs();
 
 /**
+ * @brief Override channel hop interval (0 = clear override)
+ */
+void setHopIntervalOverride(uint32_t intervalMs);
+void clearHopIntervalOverride();
+
+/**
  * @brief Get packet count since start
  */
 uint32_t getPacketCount();

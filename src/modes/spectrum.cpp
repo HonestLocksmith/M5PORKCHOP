@@ -41,6 +41,10 @@ const float DEFAULT_CENTER_MHZ = 2437.0f;  // Channel 6
 const float DEFAULT_WIDTH_MHZ = 60.0f;     // ~12 channels visible
 const float MIN_CENTER_MHZ = 2412.0f;      // Channel 1
 const float MAX_CENTER_MHZ = 2472.0f;      // Channel 13
+const float BAND_MIN_MHZ = 2400.0f;        // 2.4GHz band edge (approx)
+const float BAND_MAX_MHZ = 2483.5f;        // 2.4GHz band edge (approx)
+const float LOBE_HALF_WIDTH_MHZ = 15.0f;   // Gaussian half-width
+const float LOBE_STEP_MHZ = 0.5f;          // Frequency step for lobe drawing
 const float PAN_STEP_MHZ = 5.0f;           // One channel per pan
 
 // Timing
@@ -59,6 +63,27 @@ static const float GAUSSIAN_LUT[31] = {
     0.6616f, 0.5695f, 0.4797f, 0.3946f, 0.3173f,  // +6 to +10
     0.2493f, 0.1914f, 0.1437f, 0.1052f, 0.0756f   // +11 to +15
 };
+
+constexpr uint8_t CHANNEL_SLOTS = 14;  // index 1-13 used
+const int8_t RSSI_NO_SIGNAL = -100;
+const uint32_t ACTIVITY_INTERVAL_MS = 200;
+const float TWO_PI_F = 6.2831853f;
+
+// Per-channel activity + peak/avg stats (no heap)
+static volatile uint32_t channelActivity[CHANNEL_SLOTS] = {};
+static uint32_t channelActivitySnapshot[CHANNEL_SLOTS] = {};
+static uint16_t channelActivityRate[CHANNEL_SLOTS] = {};
+static int8_t channelPeakRSSI[CHANNEL_SLOTS] = {};
+static int8_t channelAvgRSSI[CHANNEL_SLOTS] = {};
+static uint32_t lastActivityUpdate = 0;
+static uint32_t lastPeakDecay = 0;
+static const uint32_t PEAK_DECAY_INTERVAL_MS = 200;  // Decay peaks every 200ms
+static char mergeSsidKeys[MAX_SPECTRUM_NETWORKS][33] = {};
+static uint8_t mergeSsidBssid[MAX_SPECTRUM_NETWORKS][6] = {};
+static int8_t mergeSsidRssi[MAX_SPECTRUM_NETWORKS] = {};
+static uint32_t mergeSsidLastSeen[MAX_SPECTRUM_NETWORKS] = {};
+static uint16_t mergeSsidCount = 0;
+const int8_t MERGE_HYSTERESIS_DB = 6;
 
 // Static members
 bool SpectrumMode::running = false;
@@ -120,6 +145,31 @@ bool SpectrumMode::revealingClients = false;
 uint32_t SpectrumMode::revealStartTime = 0;
 uint32_t SpectrumMode::lastRevealBurst = 0;
 
+static inline int8_t smoothIIR(int8_t current, int8_t sample, uint8_t alpha) {
+    int16_t accum = (int16_t)current * (alpha - 1) + sample;
+    return (int8_t)(accum / alpha);
+}
+
+static void updateChannelStats(uint8_t channel, int8_t rssi) {
+    if (channel < 1 || channel > 13) return;
+
+    if (channelActivity[channel] < 0xFFFFFFFFu) {
+        channelActivity[channel]++;
+    }
+
+    if (channelPeakRSSI[channel] == RSSI_NO_SIGNAL) {
+        channelPeakRSSI[channel] = rssi;
+    } else if (rssi > channelPeakRSSI[channel]) {
+        channelPeakRSSI[channel] = (int8_t)((channelPeakRSSI[channel] + rssi * 3) / 4);
+    }
+
+    if (channelAvgRSSI[channel] == RSSI_NO_SIGNAL) {
+        channelAvgRSSI[channel] = rssi;
+    } else {
+        channelAvgRSSI[channel] = smoothIIR(channelAvgRSSI[channel], rssi, 16);
+    }
+}
+
 void SpectrumMode::init() {
     networks.clear();
     networks.shrink_to_fit();  // Release vector capacity
@@ -167,6 +217,17 @@ void SpectrumMode::init() {
     ppsCounter = 0;
     displayPps = 0;
     lastPpsUpdate = 0;
+
+    // Reset per-channel stats/history
+    lastActivityUpdate = 0;
+    mergeSsidCount = 0;
+    for (uint8_t ch = 0; ch < CHANNEL_SLOTS; ch++) {
+        channelActivity[ch] = 0;
+        channelActivitySnapshot[ch] = 0;
+        channelActivityRate[ch] = 0;
+        channelPeakRSSI[ch] = RSSI_NO_SIGNAL;
+        channelAvgRSSI[ch] = RSSI_NO_SIGNAL;
+    }
 }
 
 void SpectrumMode::start() {
@@ -178,6 +239,9 @@ void SpectrumMode::start() {
     if (!NetworkRecon::isRunning()) {
         NetworkRecon::start();
     }
+
+    // Apply spectrum-specific sweep speed
+    NetworkRecon::setHopIntervalOverride(Config::wifi().spectrumHopInterval);
     
     // Reserve memory for spectrum-specific network data
     networks.reserve(MAX_SPECTRUM_NETWORKS);
@@ -212,6 +276,9 @@ void SpectrumMode::stop() {
     if (NetworkRecon::isChannelLocked()) {
         NetworkRecon::unlockChannel();
     }
+
+    // Clear spectrum-specific sweep override
+    NetworkRecon::clearHopIntervalOverride();
     
     running = false;
     Display::setWiFiStatus(false);
@@ -284,13 +351,31 @@ void SpectrumMode::update() {
             }
         }
         
+        bool inserted = false;
+        bool replaced = false;
         busy = true;  // Block callback during vector modification
         if (networks.size() < MAX_SPECTRUM_NETWORKS && canGrow) {
             networks.push_back(pendingNetwork);
-            // Auto-select first network
-            if (selectedIndex < 0) {
-                selectedIndex = 0;
+            inserted = true;
+        } else if (!networks.empty()) {
+            // No capacity to grow - replace weakest entry if new one is stronger
+            int weakestIdx = -1;
+            int8_t weakestRssi = 127;
+            for (size_t i = 0; i < networks.size(); i++) {
+                if (selectedIndex >= 0 && (int)i == selectedIndex) continue;
+                if (monitoringNetwork && macEqual(networks[i].bssid, monitoredBSSID)) continue;
+                if (weakestIdx < 0 || networks[i].rssi < weakestRssi) {
+                    weakestRssi = networks[i].rssi;
+                    weakestIdx = (int)i;
+                }
             }
+            if (weakestIdx >= 0 && pendingNetwork.rssi > weakestRssi) {
+                networks[weakestIdx] = pendingNetwork;
+                replaced = true;
+            }
+        }
+        if ((inserted || replaced) && selectedIndex < 0) {
+            selectedIndex = 0;
         }
         pendingNetworkAdd = false;
         busy = false;
@@ -335,6 +420,34 @@ void SpectrumMode::update() {
     
     // Channel hopping is handled by NetworkRecon; Spectrum only locks when needed.
     
+    // Update per-channel activity rates
+    if (now - lastActivityUpdate >= ACTIVITY_INTERVAL_MS) {
+        uint32_t dt = now - lastActivityUpdate;
+        if (dt == 0) dt = 1;
+        for (uint8_t ch = 1; ch <= 13; ch++) {
+            uint32_t current = channelActivity[ch];
+            uint32_t prev = channelActivitySnapshot[ch];
+            uint32_t delta = current - prev;
+            channelActivitySnapshot[ch] = current;
+            uint32_t rate = (delta * 1000u) / dt;
+            if (rate > 65535u) rate = 65535u;
+            channelActivityRate[ch] = (uint16_t)((channelActivityRate[ch] * 3u + rate) / 4u);
+        }
+        lastActivityUpdate = now;
+    }
+    
+    // Decay peak RSSI toward average (prevents "sticky" high bars)
+    // Reference: docs/review/spectrum.cpp decays peaks every 200ms
+    if (now - lastPeakDecay >= PEAK_DECAY_INTERVAL_MS) {
+        for (uint8_t ch = 1; ch <= 13; ch++) {
+            if (channelPeakRSSI[ch] > channelAvgRSSI[ch] && channelAvgRSSI[ch] != RSSI_NO_SIGNAL) {
+                // Gentle decay: average peak with current average
+                channelPeakRSSI[ch] = (int8_t)((channelPeakRSSI[ch] + channelAvgRSSI[ch]) / 2);
+            }
+        }
+        lastPeakDecay = now;
+    }
+    
     // Prune stale networks periodically (only when NOT monitoring)
     if (!monitoringNetwork && now - lastUpdateTime > UPDATE_INTERVAL_MS) {
         pruneStale();
@@ -371,8 +484,29 @@ void SpectrumMode::updateRenderSnapshot() {
     if (minRssi < RSSI_MIN) minRssi = RSSI_MIN;
     if (minRssi > RSSI_MAX) minRssi = RSSI_MAX;
     bool collapse = Config::wifi().spectrumCollapseSsid;
+    uint32_t now = millis();
+    uint32_t staleMs = Config::wifi().spectrumStaleMs;
+    if (staleMs < 1000) staleMs = 1000;
+    if (staleMs > 60000) staleMs = 60000;
 
-    static char ssidKeys[MAX_SPECTRUM_NETWORKS][33];
+    if (collapse && mergeSsidCount > 0) {
+        for (uint16_t i = 0; i < mergeSsidCount; ) {
+            if ((now - mergeSsidLastSeen[i]) > staleMs) {
+                uint16_t last = mergeSsidCount - 1;
+                if (i != last) {
+                    strncpy(mergeSsidKeys[i], mergeSsidKeys[last], 32);
+                    mergeSsidKeys[i][32] = 0;
+                    memcpy(mergeSsidBssid[i], mergeSsidBssid[last], 6);
+                    mergeSsidRssi[i] = mergeSsidRssi[last];
+                    mergeSsidLastSeen[i] = mergeSsidLastSeen[last];
+                }
+                mergeSsidCount--;
+                continue;
+            }
+            i++;
+        }
+    }
+
     size_t count = 0;
     for (size_t i = 0; i < networks.size(); i++) {
         const SpectrumNetwork& net = networks[i];
@@ -382,26 +516,46 @@ void SpectrumMode::updateRenderSnapshot() {
 
         bool collapseKey = collapse && !net.isHidden && net.ssid[0] != 0;
         if (collapseKey) {
-            int existing = -1;
-            for (size_t j = 0; j < count; j++) {
-                if (ssidKeys[j][0] == '\0') continue;
-                if (strncmp(ssidKeys[j], net.ssid, 32) == 0) {
-                    existing = (int)j;
+            int mergeIdx = -1;
+            for (uint16_t j = 0; j < mergeSsidCount; j++) {
+                if (mergeSsidKeys[j][0] == '\0') continue;
+                if (strncmp(mergeSsidKeys[j], net.ssid, 32) == 0) {
+                    mergeIdx = (int)j;
                     break;
                 }
             }
-            if (existing >= 0) {
-                if (net.rssi > renderNets[existing].rssi) {
-                    SpectrumRenderNet& out = renderNets[existing];
-                    memcpy(out.bssid, net.bssid, 6);
-                    out.channel = net.channel;
-                    out.rssi = net.rssi;
-                    out.authmode = net.authmode;
-                    out.hasPMF = net.hasPMF;
-                    out.isHidden = net.isHidden;
-                    out.displayFreqMHz = net.displayFreqMHz;
+            if (mergeIdx < 0) {
+                if (mergeSsidCount < MAX_SPECTRUM_NETWORKS) {
+                    mergeIdx = mergeSsidCount++;
+                    strncpy(mergeSsidKeys[mergeIdx], net.ssid, 32);
+                    mergeSsidKeys[mergeIdx][32] = 0;
+                    memcpy(mergeSsidBssid[mergeIdx], net.bssid, 6);
+                    mergeSsidRssi[mergeIdx] = net.rssi;
+                    mergeSsidLastSeen[mergeIdx] = net.lastSeen;
+                } else {
+                    collapseKey = false;
                 }
-                continue;
+            } else {
+                if (memcmp(mergeSsidBssid[mergeIdx], net.bssid, 6) == 0) {
+                    mergeSsidRssi[mergeIdx] = net.rssi;
+                    mergeSsidLastSeen[mergeIdx] = net.lastSeen;
+                } else {
+                    bool stale = (now - mergeSsidLastSeen[mergeIdx]) > staleMs;
+                    bool stronger = net.rssi >= (int)(mergeSsidRssi[mergeIdx] + MERGE_HYSTERESIS_DB);
+                    if (stale || stronger) {
+                        memcpy(mergeSsidBssid[mergeIdx], net.bssid, 6);
+                        mergeSsidRssi[mergeIdx] = net.rssi;
+                        mergeSsidLastSeen[mergeIdx] = net.lastSeen;
+                    }
+                }
+            }
+            if (collapseKey) {
+                if (mergeIdx < 0) {
+                    continue;
+                }
+                if (memcmp(mergeSsidBssid[mergeIdx], net.bssid, 6) != 0) {
+                    continue;
+                }
             }
         }
 
@@ -417,13 +571,6 @@ void SpectrumMode::updateRenderSnapshot() {
         out.hasPMF = net.hasPMF;
         out.isHidden = net.isHidden;
         out.displayFreqMHz = net.displayFreqMHz;
-
-        if (collapseKey) {
-            strncpy(ssidKeys[count], net.ssid, 32);
-            ssidKeys[count][32] = 0;
-        } else {
-            ssidKeys[count][0] = '\0';
-        }
         count++;
     }
     renderCount = (uint16_t)count;
@@ -1128,15 +1275,23 @@ void SpectrumMode::drawSpectrum(M5Canvas& canvas) {
             isSelected = (memcmp(net.bssid, renderSelected.bssid, 6) == 0);
         }
 
-        drawGaussianLobe(canvas, freq, net.rssi, isSelected);
+        uint16_t activity = 0;
+        if (net.channel >= 1 && net.channel <= 13) {
+            activity = channelActivityRate[net.channel];
+        }
+        drawGaussianLobe(canvas, freq, net.rssi, isSelected, activity);
     }
 }
 
 void SpectrumMode::drawGaussianLobe(M5Canvas& canvas, float centerFreqMHz, 
-                                     int8_t rssi, bool filled) {
+                                     int8_t rssi, bool filled, uint16_t activityPps) {
     // 2.4GHz WiFi channels are 22MHz wide
     // Uses pre-computed GAUSSIAN_LUT[] to avoid expensive expf() calls
     // LUT index 0-30 maps to distance -15 to +15 MHz
+
+    float center = constrain(centerFreqMHz, MIN_CENTER_MHZ, MAX_CENTER_MHZ);
+    float startFreq = fmax(center - LOBE_HALF_WIDTH_MHZ, BAND_MIN_MHZ);
+    float endFreq = fmin(center + LOBE_HALF_WIDTH_MHZ, BAND_MAX_MHZ);
     
     int peakY = rssiToY(rssi);
     int baseY = SPECTRUM_BOTTOM;
@@ -1144,23 +1299,39 @@ void SpectrumMode::drawGaussianLobe(M5Canvas& canvas, float centerFreqMHz,
     // Don't draw if peak is below baseline
     if (peakY >= baseY) return;
     
-    // Draw lobe from center-15MHz to center+15MHz
+    uint8_t skipMod = 1;
+    if (filled && activityPps > 0) {
+        uint16_t capped = activityPps;
+        if (capped > 400) capped = 400;
+        float pulseSpeed = 1.0f + ((float)capped / 400.0f) * 7.0f;
+        uint32_t phaseMs = (uint32_t)(millis() * pulseSpeed) % 1000u;
+        float phase = (float)phaseMs / 1000.0f;
+        float intensity = 0.5f + 0.5f * sinf(phase * TWO_PI_F);
+        skipMod = (uint8_t)(6 - (int)(intensity * 5.0f));
+        if (skipMod < 1) skipMod = 1;
+        if (skipMod > 6) skipMod = 6;
+    }
+    
+    // Draw lobe from center-15MHz to center+15MHz (clipped to band edges)
     int prevX = -1;
     int prevY = baseY;
+    bool prevVisible = false;
+    int xCounter = 0;
     
-    for (float freq = centerFreqMHz - 15; freq <= centerFreqMHz + 15; freq += 0.5f) {
+    for (float freq = startFreq; freq <= endFreq; freq += LOBE_STEP_MHZ) {
         int x = freqToX(freq);
         
         // Skip if outside visible area
         if (x < SPECTRUM_LEFT || x > SPECTRUM_RIGHT) {
             prevX = x;
             prevY = baseY;
+            prevVisible = false;
             continue;
         }
         
         // Gaussian amplitude from LUT with linear interpolation
         // LUT maps integer distances -15 to +15 (indices 0-30)
-        float dist = freq - centerFreqMHz;
+        float dist = freq - center;
         float lutPos = dist + 15.0f;  // Map -15..+15 to 0..30
         float amplitude;
         if (lutPos < 0.0f || lutPos > 30.0f) {
@@ -1177,20 +1348,27 @@ void SpectrumMode::drawGaussianLobe(M5Canvas& canvas, float centerFreqMHz,
         }
         int y = baseY - (int)((baseY - peakY) * amplitude);
         
-        if (prevX >= SPECTRUM_LEFT && prevX <= SPECTRUM_RIGHT) {
-            if (filled) {
-                // Filled lobe - draw vertical line from baseline to curve
-                if (y < baseY) {
+        if (filled) {
+            // Filled lobe - draw vertical line from baseline to curve
+            if (y < baseY) {
+                if (skipMod == 1 || (xCounter % skipMod) == 0) {
                     canvas.drawFastVLine(x, y, baseY - y, COLOR_FG);
                 }
+            }
+        } else {
+            if (!prevVisible) {
+                if (y < baseY) {
+                    canvas.drawLine(x, baseY, x, y, COLOR_FG);
+                }
             } else {
-                // Outline only - connect points
                 canvas.drawLine(prevX, prevY, x, y, COLOR_FG);
             }
         }
         
         prevX = x;
         prevY = y;
+        prevVisible = true;
+        xCounter++;
     }
 }
 
@@ -1361,6 +1539,9 @@ void SpectrumMode::pruneStale() {
     busy = true;
     
     uint32_t now = millis();
+    uint32_t staleMs = Config::wifi().spectrumStaleMs;
+    if (staleMs < 1000) staleMs = 1000;
+    if (staleMs > 60000) staleMs = 60000;
     
     // Save BSSID of selected network before pruning
     uint8_t selectedBSSID[6] = {0};
@@ -1395,7 +1576,7 @@ void SpectrumMode::pruneStale() {
     busy = false;
 }
 
-void SpectrumMode::onBeacon(const uint8_t* bssid, uint8_t channel, int8_t rssi, const char* ssid, wifi_auth_mode_t authmode, bool hasPMF, bool isProbeResponse) {
+void SpectrumMode::onBeacon(const uint8_t* bssid, uint8_t channel, bool channelTrusted, int8_t rssi, const char* ssid, wifi_auth_mode_t authmode, bool hasPMF, bool isProbeResponse) {
     // Skip if main thread is accessing networks
     if (busy) return;
     
@@ -1417,16 +1598,38 @@ void SpectrumMode::onBeacon(const uint8_t* bssid, uint8_t channel, int8_t rssi, 
         SpectrumNetwork& net = networks[i];
         if (memcmp(net.bssid, bssid, 6) == 0) {
             // Update existing - these are atomic writes, safe without lock
-            net.rssi = rssi;
+            net.rssi = smoothIIR(net.rssi, rssi, 4);
             net.lastSeen = millis();
             net.authmode = authmode;  // Update auth mode
             net.hasPMF = hasPMF;      // Update PMF status
-            net.channel = channel;    // Update channel in case it changed
+            uint8_t prevChannel = net.channel;
+            if (channelTrusted) {
+                net.channel = channel;    // Update channel only when trusted
+            }
             
             // Smooth the display frequency with EMA to prevent left/right jitter
-            // Alpha=0.15 balances responsiveness with stability
-            float targetFreq = channelToFreq(channel);
-            net.displayFreqMHz += (targetFreq - net.displayFreqMHz) * 0.15f;
+            // Snap immediately on trusted channel change to avoid ghost trails.
+            // Also snap if already close to target (prevents micro-oscillation artifacts)
+            float targetFreq = channelToFreq(net.channel);
+            float freqDiff = fabsf(targetFreq - net.displayFreqMHz);
+            
+            if (channelTrusted && prevChannel != net.channel) {
+                // Channel changed - snap immediately to avoid ghost trails
+                net.displayFreqMHz = targetFreq;
+            } else if (freqDiff < 0.5f) {
+                // Close enough - snap to target (prevents micro-jitter)
+                net.displayFreqMHz = targetFreq;
+            } else if (freqDiff > 5.0f) {
+                // Far off (more than 1 channel) - fast snap (alpha=0.5)
+                net.displayFreqMHz += (targetFreq - net.displayFreqMHz) * 0.5f;
+            } else {
+                // Normal smoothing - reduced alpha for faster response
+                net.displayFreqMHz += (targetFreq - net.displayFreqMHz) * 0.25f;
+            }
+            
+            // Clamp to valid range
+            if (net.displayFreqMHz < MIN_CENTER_MHZ) net.displayFreqMHz = MIN_CENTER_MHZ;
+            if (net.displayFreqMHz > MAX_CENTER_MHZ) net.displayFreqMHz = MAX_CENTER_MHZ;
             
             // Probe response can reveal hidden SSID
             if (hasSSID && net.isHidden && net.ssid[0] == 0) {
@@ -1558,10 +1761,10 @@ void SpectrumMode::promiscuousCallback(const wifi_promiscuous_pkt_t* pkt, wifi_p
     const uint8_t* payload = pkt->payload;
     uint16_t len = pkt->rx_ctrl.sig_len;
     int8_t rssi = pkt->rx_ctrl.rssi;
-    uint8_t channel = pkt->rx_ctrl.channel;
+    uint8_t rxChannel = pkt->rx_ctrl.channel;
+    if (rxChannel < 1 || rxChannel > 13) rxChannel = currentChannel;
     
-    // Validate channel range
-    if (channel < 1 || channel > 13) return;
+    updateChannelStats(rxChannel, rssi);
     
     // Handle data frames when monitoring
     if (type == WIFI_PKT_DATA && monitoringNetwork) {
@@ -1582,8 +1785,10 @@ void SpectrumMode::promiscuousCallback(const wifi_promiscuous_pkt_t* pkt, wifi_p
     // BSSID is at offset 16
     const uint8_t* bssid = payload + 16;
     
-    // Parse SSID from tagged parameters (starts at offset 36)
+    // Parse SSID and DS channel from tagged parameters (starts at offset 36)
     char ssid[33] = {0};
+    bool ssidFound = false;
+    uint8_t dsChannel = 0;
     uint16_t offset = 36;
     
     while (offset + 2 < len) {
@@ -1597,11 +1802,20 @@ void SpectrumMode::promiscuousCallback(const wifi_promiscuous_pkt_t* pkt, wifi_p
             if (offset + 2 + tagLen >= len) break; // Bounds check before memcpy
             memcpy(ssid, payload + offset + 2, tagLen);
             ssid[tagLen] = 0;
-            break;
+            ssidFound = true;
+        } else if (tagNum == 3 && tagLen == 1) {  // DS Parameter Set (channel)
+            dsChannel = payload[offset + 2];
         }
         
+        if (ssidFound && dsChannel >= 1 && dsChannel <= 13) break;
         offset += 2 + tagLen;
     }
+    
+    bool channelTrusted = (dsChannel >= 1 && dsChannel <= 13);
+    uint8_t channel = channelTrusted ? dsChannel : rxChannel;
+    
+    // Validate channel range (after DS channel override)
+    if (channel < 1 || channel > 13) return;
     
     // Parse auth mode from RSN (0x30) and WPA (0xDD) IEs
     wifi_auth_mode_t authmode = WIFI_AUTH_OPEN;  // Default to open
@@ -1643,7 +1857,7 @@ void SpectrumMode::promiscuousCallback(const wifi_promiscuous_pkt_t* pkt, wifi_p
     }
     
     // Update spectrum data
-    onBeacon(bssid, channel, rssi, ssid, authmode, hasPMF, isProbeResponse);
+    onBeacon(bssid, channel, channelTrusted, rssi, ssid, authmode, hasPMF, isProbeResponse);
 }
 
 // Check if auth mode is considered vulnerable (OPEN, WEP, WPA1)

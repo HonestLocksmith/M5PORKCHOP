@@ -38,6 +38,7 @@ enum SettingId : uint8_t {
     SET_WIGLE_TOKEN_STATUS,
     SET_WIGLE_LOAD,
     SET_CH_HOP,
+    SET_SPEC_SWEEP,
     SET_LOCK_TIME,
     SET_DEAUTH,
     SET_RND_MAC,
@@ -114,7 +115,8 @@ static const EntryData kIntegEntries[] = {
 };
 
 static const EntryData kRadioEntries[] = {
-    {SET_CH_HOP, "SWEEP SPD", SettingType::VALUE, 50, 2000, 50, "MS", "HOP SPEED"},
+    {SET_CH_HOP, "STREET SW33P", SettingType::VALUE, 50, 2000, 50, "MS", "HOP SPEED"},
+    {SET_SPEC_SWEEP, "SWEEP SPD", SettingType::VALUE, 50, 2000, 50, "MS", "SPECTRUM SWEEP"},
     {SET_LOCK_TIME, "GL4SS ST4R3", SettingType::VALUE, 1000, 10000, 500, "MS", "HOW LONG YOU HOLD A TARGET"},
     {SET_DEAUTH, "DEAUTH", SettingType::TOGGLE, 0, 1, 1, "", "KICK CLIENTS OFF APS"},
     {SET_RND_MAC, "RND MAC", SettingType::TOGGLE, 0, 1, 1, "", "NEW MAC EACH MODE START"},
@@ -184,6 +186,7 @@ static bool isConfigSetting(SettingId id) {
         case SET_WIFI_SSID:
         case SET_WIFI_PASS:
         case SET_CH_HOP:
+        case SET_SPEC_SWEEP:
         case SET_LOCK_TIME:
         case SET_DEAUTH:
         case SET_RND_MAC:
@@ -461,6 +464,8 @@ static int getSettingValue(SettingId id) {
             return static_cast<int>(Config::personality().bootMode);
         case SET_CH_HOP:
             return Config::wifi().channelHopInterval;
+        case SET_SPEC_SWEEP:
+            return Config::wifi().spectrumHopInterval;
         case SET_LOCK_TIME:
             return Config::wifi().lockTime;
         case SET_DEAUTH:
@@ -558,6 +563,12 @@ static bool setSettingValue(SettingId id, int value) {
             uint16_t newVal = static_cast<uint16_t>(value);
             if (Config::wifi().channelHopInterval == newVal) return false;
             Config::wifi().channelHopInterval = newVal;
+            return true;
+        }
+        case SET_SPEC_SWEEP: {
+            uint16_t newVal = static_cast<uint16_t>(value);
+            if (Config::wifi().spectrumHopInterval == newVal) return false;
+            Config::wifi().spectrumHopInterval = newVal;
             return true;
         }
         case SET_LOCK_TIME: {

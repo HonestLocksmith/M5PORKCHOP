@@ -10,7 +10,7 @@
 
 // Client monitoring constants
 #define MAX_SPECTRUM_CLIENTS 8
-#define MAX_SPECTRUM_NETWORKS 100  // Cap networks to prevent OOM
+#define MAX_SPECTRUM_NETWORKS 64  // Reduced from 100 for cleaner display
 #define CLIENT_STALE_TIMEOUT_MS 30000  // 30s before client considered gone
 #define VISIBLE_CLIENTS 4              // How many fit on screen
 #define SIGNAL_LOST_TIMEOUT_MS 15000   // 15s no beacon = signal lost
@@ -95,7 +95,7 @@ public:
     static bool isRunning() { return running; }
     
     // For promiscuous callback - updates network RSSI
-    static void onBeacon(const uint8_t* bssid, uint8_t channel, int8_t rssi, const char* ssid, wifi_auth_mode_t authmode, bool hasPMF, bool isProbeResponse);
+    static void onBeacon(const uint8_t* bssid, uint8_t channel, bool channelTrusted, int8_t rssi, const char* ssid, wifi_auth_mode_t authmode, bool hasPMF, bool isProbeResponse);
     
     // Bottom bar info
     static void getSelectedInfo(char* out, size_t len);
@@ -177,7 +177,7 @@ private:
     static void drawSpectrum(M5Canvas& canvas);
     static void drawClientOverlay(M5Canvas& canvas);  // Client list overlay
     static void drawClientDetail(M5Canvas& canvas);   // Client detail popup
-    static void drawGaussianLobe(M5Canvas& canvas, float centerFreqMHz, int8_t rssi, bool filled);
+    static void drawGaussianLobe(M5Canvas& canvas, float centerFreqMHz, int8_t rssi, bool filled, uint16_t activityPps);
     static void drawAxis(M5Canvas& canvas);
     static void drawChannelMarkers(M5Canvas& canvas);
     static void drawFilterBar(M5Canvas& canvas);     // Filter indicator bar

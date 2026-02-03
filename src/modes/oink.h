@@ -22,10 +22,14 @@ struct DetectedNetwork {
     uint8_t bssid[6];
     char ssid[33];
     int8_t rssi;
+    int8_t rssiAvg;          // Smoothed RSSI (EMA), helps quality scoring
     uint8_t channel;
     wifi_auth_mode_t authmode;
+    uint32_t firstSeen;      // millis() when first detected
     uint32_t lastSeen;
+    uint32_t lastBeaconSeen; // millis() of last beacon (for interval EMA)
     uint16_t beaconCount;
+    uint16_t beaconIntervalEmaMs; // Smoothed beacon interval (ms), 0 if unknown
     bool isTarget;
     bool hasPMF;  // Protected Management Frames (immune to deauth)
     bool hasHandshake;  // Already captured handshake for this network
@@ -33,6 +37,7 @@ struct DetectedNetwork {
     bool isHidden;  // Hidden SSID (needs probe response)
     uint32_t lastDataSeen;     // millis() of most recent client data frame
     uint32_t cooldownUntil;    // millis() until eligible for auto-target
+    uint64_t clientBitset;     // Approximate unique client tracker (bitset)
 };
 
 // Frame storage for PCAP export - stores full 802.11 frame with headers

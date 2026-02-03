@@ -255,9 +255,25 @@ static const uint32_t LOCK_FAST_TRACK_MS = 2500;     // Fast-track lock when cli
 static const uint32_t LOCK_EARLY_EXIT_MS = 4000;     // Bail if no clients show up quickly
 static const uint32_t ATTACK_COOLDOWN_MS = 8000;     // Cooldown after failed attack
 
+// Target warm-up gate (avoid locking before recon has signal density)
+static const uint32_t TARGET_WARMUP_MIN_MS = 1500;    // Minimum time before target selection
+static const uint32_t TARGET_WARMUP_FORCE_MS = 5000;  // Allow targeting even if quiet
+static const uint32_t TARGET_WARMUP_MIN_PACKETS = 200;
+static const uint8_t TARGET_WARMUP_MIN_NETWORKS = 2;
+static const uint8_t TARGET_MAX_ATTEMPTS = 4;
+
 // Bored state tracking
 static uint8_t consecutiveFailedScans = 0;      // Track failed getNextTarget() calls
 static uint32_t lastBoredUpdate = 0;            // For periodic bored mood updates
+
+// Recon warm-up tracking
+static uint32_t oinkStartMs = 0;
+static uint32_t reconPacketStart = 0;
+
+static bool isWarmForTargets(uint32_t now);
+static uint8_t computeQualityScore(const DetectedNetwork& net, uint32_t now);
+static int computeTargetScore(const DetectedNetwork& net, uint32_t now);
+static bool isEligibleTarget(const DetectedNetwork& net, uint32_t now);
 
 // WAITING state variables (reset in init() to prevent stale state on restart)
 static bool checkedForPendingHandshake = false;
@@ -376,6 +392,8 @@ void OinkMode::start() {
     channelHopping = true;
     lastHopTime = millis();
     lastScanTime = millis();
+    oinkStartMs = lastScanTime;
+    reconPacketStart = NetworkRecon::getPacketCount();
     
     // Set grass animation speed for OINK mode
     Avatar::setGrassSpeed(120);  // ~8 FPS casual trot
@@ -2947,47 +2965,18 @@ void OinkMode::sortNetworksByPriority() {
 
     uint32_t now = millis();
     std::sort(sorted.begin(), sorted.end(), [now](const DetectedNetwork& a, const DetectedNetwork& b) {
-        // Calculate priority score (lower = higher priority)
-        auto getPriority = [now](const DetectedNetwork& net) -> int {
-            // Already have handshake - lowest priority
-            if (net.hasHandshake) return 100;
-            // PMF protected - can't attack
-            if (net.hasPMF) return 99;
-            // Open networks - no handshake to capture
-            if (net.authmode == WIFI_AUTH_OPEN) return 98;
-            if (net.cooldownUntil > now) return 97;
-            
-            int priority = 50;  // Base
-            
-            // Has clients = much higher priority (deauth more likely to work)
-            if (net.lastDataSeen > 0 &&
-                (now - net.lastDataSeen) <= CLIENT_RECENT_MS) {
-                priority -= 30;
-            } else if (net.lastDataSeen > 0) {
-                priority -= 10;
-            }
-            
-            // Auth mode priority (weaker = higher priority for cracking)
-            switch (net.authmode) {
-                case WIFI_AUTH_WEP: priority -= 15; break;   // Deprecated, easy to crack
-                case WIFI_AUTH_WPA_PSK: priority -= 10; break;  // Weak
-                case WIFI_AUTH_WPA_WPA2_PSK: priority -= 5; break;
-                case WIFI_AUTH_WPA2_PSK: priority += 0; break;  // Standard
-                case WIFI_AUTH_WPA3_PSK: priority += 10; break;  // Usually has PMF
-                default: break;
-            }
-            
-            // Fewer attack attempts = higher priority (try new ones first)
-            priority += net.attackAttempts * 5;
-            
-            // Strong signal = higher priority (more reliable)
-            if (net.rssi > -50) priority -= 5;
-            else if (net.rssi > -70) priority -= 2;
-            
-            return priority;
+        auto getScore = [now](const DetectedNetwork& net) -> int {
+            int score = computeTargetScore(net, now);
+            if (net.hasHandshake) score -= 60;
+            if (net.hasPMF) score -= 50;
+            if (net.authmode == WIFI_AUTH_OPEN) score -= 40;
+            if (net.ssid[0] == 0 || net.isHidden) score -= 20;
+            if (net.cooldownUntil > now) score -= 20;
+            if (isExcluded(net.bssid)) score -= 80;
+            return score;
         };
         
-        return getPriority(a) < getPriority(b);
+        return getScore(a) > getScore(b);
     });
 
     NetworkRecon::enterCritical();
@@ -3020,16 +3009,113 @@ void OinkMode::sortNetworksByPriority() {
     updateTargetCache();
 }
 
+static bool isWarmForTargets(uint32_t now) {
+    if (oinkStartMs == 0) return true;
+    uint32_t elapsed = now - oinkStartMs;
+    if (elapsed < TARGET_WARMUP_MIN_MS) {
+        return false;
+    }
+    if (elapsed >= TARGET_WARMUP_FORCE_MS) {
+        return true;
+    }
+    uint32_t packets = NetworkRecon::getPacketCount() - reconPacketStart;
+    if (packets >= TARGET_WARMUP_MIN_PACKETS) {
+        return true;
+    }
+    if (NetworkRecon::getNetworkCount() >= TARGET_WARMUP_MIN_NETWORKS) {
+        return true;
+    }
+    return false;
+}
+
+static uint8_t computeQualityScore(const DetectedNetwork& net, uint32_t now) {
+    int8_t rssi = (net.rssiAvg != 0) ? net.rssiAvg : net.rssi;
+    uint8_t score = 0;
+
+    if (rssi <= -95) score += 0;
+    else if (rssi >= -30) score += 60;
+    else score += (uint8_t)(((int)rssi + 95) * 60 / 65);
+
+    uint32_t age = now - net.lastSeen;
+    if (age <= 2000) score += 20;
+    else if (age <= 5000) score += 12;
+    else if (age <= 15000) score += 5;
+
+    if (net.lastDataSeen > 0) {
+        uint32_t dataAge = now - net.lastDataSeen;
+        if (dataAge <= 3000) score += 20;
+        else if (dataAge <= 10000) score += 10;
+        else if (dataAge <= 30000) score += 5;
+    }
+
+    if (net.beaconIntervalEmaMs > 0) {
+        if (net.beaconIntervalEmaMs <= 150) score += 10;
+        else if (net.beaconIntervalEmaMs <= 500) score += 6;
+        else if (net.beaconIntervalEmaMs <= 1000) score += 3;
+    }
+
+    if (score > 100) score = 100;
+    return score;
+}
+
+static int computeTargetScore(const DetectedNetwork& net, uint32_t now) {
+    int score = (int)computeQualityScore(net, now);
+
+    if (net.lastDataSeen > 0) {
+        uint32_t dataAge = now - net.lastDataSeen;
+        if (dataAge <= CLIENT_RECENT_MS) score += 30;
+        else if (dataAge <= CLIENT_RECENT_MS * 3) score += 10;
+        else score -= 5;
+    } else {
+        score -= 5;
+    }
+
+    uint8_t estClients = NetworkRecon::estimateClientCount(net);
+    if (estClients > 0) {
+        uint8_t capped = estClients > 5 ? 5 : estClients;
+        score += 6 + (int)capped * 2;
+    }
+
+    // Prefer weaker auth (easier crack), penalize WPA3
+    switch (net.authmode) {
+        case WIFI_AUTH_WEP: score += 15; break;
+        case WIFI_AUTH_WPA_PSK: score += 10; break;
+        case WIFI_AUTH_WPA_WPA2_PSK: score += 5; break;
+        case WIFI_AUTH_WPA2_PSK: score += 0; break;
+        case WIFI_AUTH_WPA3_PSK: score -= 10; break;
+        default: break;
+    }
+
+    score -= (int)net.attackAttempts * 8;
+    return score;
+}
+
+static inline bool isEligibleTarget(const DetectedNetwork& net, uint32_t now) {
+    if (net.ssid[0] == 0 || net.isHidden) return false;
+    if (net.cooldownUntil > now) return false;
+    if (net.hasPMF) return false;
+    if (net.hasHandshake) return false;
+    if (net.authmode == WIFI_AUTH_OPEN) return false;
+    if (net.attackAttempts >= TARGET_MAX_ATTEMPTS) return false;
+    return true;
+}
+
 int OinkMode::getNextTarget() {
-    // Smart target selection with retry logic
-    // First pass: networks with clients, no handshake, attackAttempts < 3
     uint32_t now = millis();
     auto hasRecentClient = [now](const DetectedNetwork& net) {
         return net.lastDataSeen > 0 &&
             (now - net.lastDataSeen) <= CLIENT_RECENT_MS;
     };
 
-    int result = -1;
+    if (!isWarmForTargets(now)) {
+        return -1;
+    }
+
+    int bestIdx = -1;
+    int bestScore = -100000;
+    int bestRecentIdx = -1;
+    int bestRecentScore = -100000;
+
     NetworkRecon::enterCritical();
     
     // #region agent log - H3 PMF detection check
@@ -3048,52 +3134,29 @@ int OinkMode::getNextTarget() {
     // #endregion
 
     for (int i = 0; i < (int)networks().size(); i++) {
-        if (isExcluded(networks()[i].bssid)) continue;  // BOAR BRO - skip
-        if (networks()[i].ssid[0] == 0) continue;  // Hidden network - skip (no SSID for cracking)
-        if (networks()[i].cooldownUntil > now) continue;  // Cooldown active
-        if (networks()[i].hasPMF) continue;
-        if (networks()[i].hasHandshake) continue;
-        if (networks()[i].authmode == WIFI_AUTH_OPEN) continue;  // Open = no handshake
-        if (hasRecentClient(networks()[i]) && networks()[i].attackAttempts < 3) {
-            result = i;
-            break;
+        const DetectedNetwork& net = networks()[i];
+        if (isExcluded(net.bssid)) continue;  // BOAR BRO - skip
+        if (!isEligibleTarget(net, now)) continue;
+
+        int score = computeTargetScore(net, now);
+        if (score > bestScore) {
+            bestScore = score;
+            bestIdx = i;
         }
-    }
-    
-    if (result < 0) {
-        // Second pass: any network without handshake, attackAttempts < 2
-        for (int i = 0; i < (int)networks().size(); i++) {
-            if (isExcluded(networks()[i].bssid)) continue;  // BOAR BRO - skip
-            if (networks()[i].ssid[0] == 0) continue;  // Hidden network - skip (no SSID for cracking)
-            if (networks()[i].cooldownUntil > now) continue;  // Cooldown active
-            if (networks()[i].hasPMF) continue;
-            if (networks()[i].hasHandshake) continue;
-            if (networks()[i].authmode == WIFI_AUTH_OPEN) continue;
-            if (networks()[i].attackAttempts < 2) {
-                result = i;
-                break;
-            }
-        }
-    }
-    
-    if (result < 0) {
-        // Third pass: retry networks with clients even if attempted before
-        for (int i = 0; i < (int)networks().size(); i++) {
-            if (isExcluded(networks()[i].bssid)) continue;  // BOAR BRO - skip
-            if (networks()[i].ssid[0] == 0) continue;  // Hidden network - skip (no SSID for cracking)
-            if (networks()[i].cooldownUntil > now) continue;  // Cooldown active
-            if (networks()[i].hasPMF) continue;
-            if (networks()[i].hasHandshake) continue;
-            if (networks()[i].authmode == WIFI_AUTH_OPEN) continue;
-            if (networks()[i].lastDataSeen > 0) {
-                result = i;
-                break;
+
+        if (hasRecentClient(net) && net.attackAttempts < TARGET_MAX_ATTEMPTS) {
+            if (score > bestRecentScore) {
+                bestRecentScore = score;
+                bestRecentIdx = i;
             }
         }
     }
     
     NetworkRecon::exitCritical();
-    return result;  // -1 means no suitable targets
+    if (bestRecentIdx >= 0) {
+        return bestRecentIdx;
+    }
+    return bestIdx;  // -1 means no suitable targets
 }
 
 // ============ BOAR BROS - Network Exclusion ============

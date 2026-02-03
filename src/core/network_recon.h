@@ -96,6 +96,22 @@ uint32_t getHopIntervalMs();
 uint32_t getPacketCount();
 
 // ============================================================================
+// Quality + Client Estimates
+// ============================================================================
+
+/**
+ * @brief Approximate unique client count for a network
+ * Uses a small bitset updated from data frames (lower-bound estimate).
+ */
+uint8_t estimateClientCount(const DetectedNetwork& net);
+
+/**
+ * @brief Compute a 0-100 quality score for a network
+ * Combines RSSI (smoothed), recency, activity, and beacon stability.
+ */
+uint8_t getQualityScore(const DetectedNetwork& net);
+
+// ============================================================================
 // Shared Network Data Access
 // ============================================================================
 

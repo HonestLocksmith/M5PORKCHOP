@@ -12,7 +12,6 @@ static constexpr const char* kMarker = "/m5porkchop/meta/.migrated_v1";
 
 static constexpr const char* kLegacyHandshakes = "/handshakes";
 static constexpr const char* kLegacyWardriving = "/wardriving";
-static constexpr const char* kLegacyMLData = "/mldata";
 static constexpr const char* kLegacyModels = "/models";
 static constexpr const char* kLegacyLogs = "/logs";
 static constexpr const char* kLegacyCrash = "/crash";
@@ -20,7 +19,6 @@ static constexpr const char* kLegacyScreenshots = "/screenshots";
 
 static constexpr const char* kNewHandshakes = "/m5porkchop/handshakes";
 static constexpr const char* kNewWardriving = "/m5porkchop/wardriving";
-static constexpr const char* kNewMLData = "/m5porkchop/mldata";
 static constexpr const char* kNewModels = "/m5porkchop/models";
 static constexpr const char* kNewLogs = "/m5porkchop/logs";
 static constexpr const char* kNewCrash = "/m5porkchop/crash";
@@ -252,7 +250,6 @@ static void collectDiagFiles(std::vector<String>& out) {
 static bool hasLegacyData() {
     if (SD.exists(kLegacyHandshakes)) return true;
     if (SD.exists(kLegacyWardriving)) return true;
-    if (SD.exists(kLegacyMLData)) return true;
     if (SD.exists(kLegacyModels)) return true;
     if (SD.exists(kLegacyLogs)) return true;
     if (SD.exists(kLegacyCrash)) return true;
@@ -284,7 +281,6 @@ static bool backupLegacy(const char* backupRoot) {
     const char* legacyDirs[] = {
         kLegacyHandshakes,
         kLegacyWardriving,
-        kLegacyMLData,
         kLegacyModels,
         kLegacyLogs,
         kLegacyCrash,
@@ -393,7 +389,6 @@ const char* migrationMarkerPath() { return kMarker; }
 
 const char* handshakesDir() { return usingNewLayout() ? kNewHandshakes : kLegacyHandshakes; }
 const char* wardrivingDir() { return usingNewLayout() ? kNewWardriving : kLegacyWardriving; }
-const char* mldataDir() { return usingNewLayout() ? kNewMLData : kLegacyMLData; }
 const char* modelsDir() { return usingNewLayout() ? kNewModels : kLegacyModels; }
 const char* logsDir() { return usingNewLayout() ? kNewLogs : kLegacyLogs; }
 const char* crashDir() { return usingNewLayout() ? kNewCrash : kLegacyCrash; }
@@ -431,7 +426,6 @@ void ensureDirs() {
     if (!useNew) {
         if (!SD.exists(kLegacyHandshakes)) SD.mkdir(kLegacyHandshakes);
         if (!SD.exists(kLegacyWardriving)) SD.mkdir(kLegacyWardriving);
-        if (!SD.exists(kLegacyMLData)) SD.mkdir(kLegacyMLData);
         if (!SD.exists(kLegacyModels)) SD.mkdir(kLegacyModels);
         if (!SD.exists(kLegacyLogs)) SD.mkdir(kLegacyLogs);
         return;
@@ -440,7 +434,6 @@ void ensureDirs() {
     ensureDir(kNewRoot);
     ensureDir(kNewHandshakes);
     ensureDir(kNewWardriving);
-    ensureDir(kNewMLData);
     ensureDir(kNewModels);
     ensureDir(kNewLogs);
     ensureDir(kNewCrash);
@@ -501,7 +494,6 @@ bool migrateIfNeeded() {
     const char* legacyDirs[] = {
         kLegacyHandshakes,
         kLegacyWardriving,
-        kLegacyMLData,
         kLegacyModels,
         kLegacyLogs,
         kLegacyCrash,
@@ -615,7 +607,6 @@ bool migrateIfNeeded() {
 
     if (!movePath(kLegacyHandshakes, kNewHandshakes, moved)) { rollbackMoves(moved); setUseNewLayout(false); return false; }
     if (!movePath(kLegacyWardriving, kNewWardriving, moved)) { rollbackMoves(moved); setUseNewLayout(false); return false; }
-    if (!movePath(kLegacyMLData, kNewMLData, moved)) { rollbackMoves(moved); setUseNewLayout(false); return false; }
     if (!movePath(kLegacyModels, kNewModels, moved)) { rollbackMoves(moved); setUseNewLayout(false); return false; }
     if (!movePath(kLegacyLogs, kNewLogs, moved)) { rollbackMoves(moved); setUseNewLayout(false); return false; }
     if (!movePath(kLegacyCrash, kNewCrash, moved)) { rollbackMoves(moved); setUseNewLayout(false); return false; }

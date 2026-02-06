@@ -15,7 +15,6 @@ namespace SDLayout {
     // Directories (resolved to legacy or new layout)
     const char* handshakesDir();
     const char* wardrivingDir();
-    const char* mldataDir();
     const char* modelsDir();
     const char* logsDir();
     const char* crashDir();

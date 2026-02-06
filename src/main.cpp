@@ -358,10 +358,6 @@ void setup() {
         }
     }
 
-    // Initialize ML subsystem
-    //FeatureExtractor::init();
-    //MLInference::init();
-
     // Initialize modes
     OinkMode::init();
     WarhogMode::init();
@@ -443,9 +439,6 @@ void loop() {
 
     // Update main controller (handles modes, input, state)
     porkchop.update();
-
-    // Update ML (process any pending callbacks)
-    //MLInference::update();
 
     // Update display
     Display::update();

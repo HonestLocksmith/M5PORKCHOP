@@ -17,6 +17,7 @@
 #include "core/sdlog.h"
 #include "core/wifi_utils.h"
 #include "core/heap_policy.h"
+#include "core/heap_health.h"
 #include "core/network_recon.h"
 #include "ui/display.h"
 #include "gps/gps.h"
@@ -158,8 +159,20 @@ static void exportCoreDumpToSD() {
     }
 }
 
-// Perform gentle heap conditioning to create larger contiguous blocks for TLS
-// This addresses the issue where TLS operations fail due to fragmented heap after boot
+// Heap conditioning: exploit TLSF allocator's O(1) immediate coalescing to
+// create large contiguous blocks for TLS (35KB+).
+//
+// THEORETICAL BASIS (see heap_research.md):
+// - Robson (1974) proved any allocator can need M*log2(max/min) memory in worst case.
+//   For our profile (16B-40KB), that's 11.3x — meaning 35KB TLS could need 395KB
+//   on an adversarial sequence. Since we only have 300KB, we MUST control allocation
+//   ordering to avoid worst-case patterns.
+// - TLSF (Masmano 2004) coalesces adjacent free blocks immediately on free().
+//   This 5-phase alloc-then-free pattern creates adjacent blocks, and the
+//   carefully ordered free sequence maximizes coalescing into large regions.
+// - Johnstone & Wilson (1998) showed best-fit with coalescing needs only 1.2x M.
+//   Our conditioning moves the heap from a potentially adversarial state toward
+//   the benign 1.2x regime by resetting allocation interleaving.
 void performBootHeapConditioning() {
     Serial.println("[BOOT] Performing aggressive heap conditioning...");
 
@@ -317,6 +330,9 @@ void setup() {
     // This creates larger contiguous blocks needed for TLS operations
     performBootHeapConditioning();
 
+    // Load previous session watermarks before resetting peaks
+    HeapHealth::loadPreviousSession();
+
     // TLS reserve disabled: browser handles TLS, keep heap for UI/file transfer.
 
     // Init display system
@@ -394,6 +410,9 @@ void loop() {
                       (unsigned)ESP.getMinFreeHeap());
     }
     // #endregion
+
+    // Persist session watermarks to SD (rate-limited to 60s internally)
+    HeapHealth::persistWatermarks();
 
     {
         static bool bakedActive = false;

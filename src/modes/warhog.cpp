@@ -12,6 +12,7 @@
 #include "../core/config.h"
 #include "../core/wifi_utils.h"
 #include "../core/heap_policy.h"
+#include "../core/heap_health.h"
 #include "../core/network_recon.h"
 #include "../core/wsl_bypasser.h"
 #include "../core/sdlog.h"
@@ -370,9 +371,7 @@ void WarhogMode::update() {
     
     // Periodic heap monitoring (every 30 seconds)
     if (now - lastHeapCheck >= 30000) {
-        uint32_t freeHeap = ESP.getFreeHeap();
-        
-        if (freeHeap < HeapPolicy::kWarhogHeapCritical) {
+        if (HeapHealth::getPressureLevel() >= HeapPressureLevel::Critical) {
             Display::showToast("LOW MEMORY!");
         }
         lastHeapCheck = now;

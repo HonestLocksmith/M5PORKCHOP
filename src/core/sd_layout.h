@@ -40,6 +40,7 @@ namespace SDLayout {
     const char* xpAwardedWiglePath();
     const char* boarBrosPath();
     const char* heapLogPath();
+    const char* heapWatermarksPath();
     const char* wpasecKeyPath();
     const char* wigleKeyPath();
 

@@ -43,6 +43,7 @@ static constexpr const char* kLegacyXpAwardedWpa = "/xp_awarded_wpa.txt";
 static constexpr const char* kLegacyXpAwardedWigle = "/xp_awarded_wigle.txt";
 static constexpr const char* kLegacyBoarBros = "/boar_bros.txt";
 static constexpr const char* kLegacyHeapLog = "/heap_log.txt";
+static constexpr const char* kLegacyHeapWatermarks = "/heap_wm.bin";
 static constexpr const char* kLegacyWpasecKey = "/wpasec_key.txt";
 static constexpr const char* kLegacyWigleKey = "/wigle_key.txt";
 
@@ -58,6 +59,7 @@ static constexpr const char* kNewXpAwardedWpa = "/m5porkchop/xp/xp_awarded_wpa.t
 static constexpr const char* kNewXpAwardedWigle = "/m5porkchop/xp/xp_awarded_wigle.txt";
 static constexpr const char* kNewBoarBros = "/m5porkchop/misc/boar_bros.txt";
 static constexpr const char* kNewHeapLog = "/m5porkchop/diagnostics/heap_log.txt";
+static constexpr const char* kNewHeapWatermarks = "/m5porkchop/diagnostics/heap_wm.bin";
 static constexpr const char* kNewWpasecKey = "/m5porkchop/wpa-sec/wpasec_key.txt";
 static constexpr const char* kNewWigleKey = "/m5porkchop/wigle/wigle_key.txt";
 
@@ -273,6 +275,7 @@ static bool hasLegacyData() {
     if (SD.exists(kLegacyXpAwardedWigle)) return true;
     if (SD.exists(kLegacyBoarBros)) return true;
     if (SD.exists(kLegacyHeapLog)) return true;
+    if (SD.exists(kLegacyHeapWatermarks)) return true;
     if (SD.exists(kLegacyWpasecKey)) return true;
     if (SD.exists(kLegacyWigleKey)) return true;
 
@@ -308,6 +311,7 @@ static bool backupLegacy(const char* backupRoot) {
         kLegacyXpAwardedWigle,
         kLegacyBoarBros,
         kLegacyHeapLog,
+        kLegacyHeapWatermarks,
         kLegacyWpasecKey,
         kLegacyWigleKey
     };
@@ -420,6 +424,7 @@ const char* xpAwardedWpaPath() { return usingNewLayout() ? kNewXpAwardedWpa : kL
 const char* xpAwardedWiglePath() { return usingNewLayout() ? kNewXpAwardedWigle : kLegacyXpAwardedWigle; }
 const char* boarBrosPath() { return usingNewLayout() ? kNewBoarBros : kLegacyBoarBros; }
 const char* heapLogPath() { return usingNewLayout() ? kNewHeapLog : kLegacyHeapLog; }
+const char* heapWatermarksPath() { return usingNewLayout() ? kNewHeapWatermarks : kLegacyHeapWatermarks; }
 const char* wpasecKeyPath() { return usingNewLayout() ? kNewWpasecKey : kLegacyWpasecKey; }
 const char* wigleKeyPath() { return usingNewLayout() ? kNewWigleKey : kLegacyWigleKey; }
 
@@ -521,6 +526,7 @@ bool migrateIfNeeded() {
         kLegacyXpAwardedWigle,
         kLegacyBoarBros,
         kLegacyHeapLog,
+        kLegacyHeapWatermarks,
         kLegacyWpasecKey,
         kLegacyWigleKey
     };
@@ -631,6 +637,7 @@ bool migrateIfNeeded() {
     if (!movePath(kLegacyXpAwardedWigle, kNewXpAwardedWigle, moved)) { rollbackMoves(moved); setUseNewLayout(false); return false; }
     if (!movePath(kLegacyBoarBros, kNewBoarBros, moved)) { rollbackMoves(moved); setUseNewLayout(false); return false; }
     if (!movePath(kLegacyHeapLog, kNewHeapLog, moved)) { rollbackMoves(moved); setUseNewLayout(false); return false; }
+    if (!movePath(kLegacyHeapWatermarks, kNewHeapWatermarks, moved)) { rollbackMoves(moved); setUseNewLayout(false); return false; }
     if (!movePath(kLegacyWpasecKey, kNewWpasecKey, moved)) { rollbackMoves(moved); setUseNewLayout(false); return false; }
     if (!movePath(kLegacyWigleKey, kNewWigleKey, moved)) { rollbackMoves(moved); setUseNewLayout(false); return false; }
 

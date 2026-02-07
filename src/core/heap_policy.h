@@ -41,8 +41,42 @@ namespace HeapPolicy {
     static constexpr uint32_t kHealthToastSettleMs = 3000;
     static constexpr uint8_t kHealthConditionTriggerPct = 65;
     static constexpr uint8_t kHealthConditionClearPct = 75;
-    static constexpr uint32_t kHealthConditionCooldownMs = 30000;
     static constexpr float kHealthFragPenaltyScale = 0.60f;
+
+    // Adaptive conditioning cooldown (replaces fixed 30s)
+    // Formula: cooldown = clamp(min, max, base * (largestBlock / kMinContigForTls))
+    // When heap is critically low (largestBlock << kMinContigForTls), cooldown is short (5s)
+    // When heap is healthy (largestBlock > kMinContigForTls), cooldown is long (60s)
+    static constexpr uint32_t kConditionCooldownMinMs = 15000;
+    static constexpr uint32_t kConditionCooldownMaxMs = 60000;
+    static constexpr uint32_t kConditionCooldownBaseMs = 30000;
+
+    // Memory pressure levels (graduated degradation)
+    // Level 0 (Normal): all features enabled
+    // Level 1 (Caution): reduce non-essential features
+    // Level 2 (Warning): aggressive memory shedding
+    // Level 3 (Critical): freeze state, auto-brew, graceful recovery
+    static constexpr size_t kPressureLevel1Free = 80000;    // Below = caution
+    static constexpr size_t kPressureLevel2Free = 50000;    // Below = warning
+    static constexpr size_t kPressureLevel3Free = 30000;    // Below = critical
+    static constexpr float kPressureLevel1Frag = 0.60f;     // Below = caution
+    static constexpr float kPressureLevel2Frag = 0.40f;     // Below = warning
+    static constexpr float kPressureLevel3Frag = 0.25f;     // Below = critical
+    static constexpr uint32_t kPressureHysteresisMs = 3000;  // Min time before level decrease
+
+    // Pressure level gates for expensive operations
+    // Auto-brew blocked at Critical (brew needs 35KB transient, critical has <30KB)
+    static constexpr uint8_t kMaxPressureLevelForAutoBrew = 2;  // Warning
+    // SD writes blocked at Warning+ (file ops allocate FAT/handle buffers)
+    static constexpr uint8_t kMaxPressureLevelForSDWrite = 1;   // Caution
+
+    // Watermark persistence interval (auto-save to SD)
+    static constexpr uint32_t kWatermarkSaveIntervalMs = 60000;
+
+    // Knuth's Rule monitoring (free_blocks / allocated_blocks ratio)
+    // By the Fifty Percent Rule, this should be ~0.5 at steady state.
+    // Values significantly above 0.7 indicate pathological fragmentation.
+    static constexpr float kKnuthRatioWarning = 0.70f;
 
     // Growth gating (fragmentation-aware)
     static constexpr float kMinFragRatioForGrowth = 0.40f;

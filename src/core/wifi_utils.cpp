@@ -349,8 +349,16 @@ size_t conditionHeapForTLS() {
                   ESP.getFreeHeap(), heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
     
     // Step 3: Dwell time with channel hopping - THIS IS THE KEY
-    // The WiFi driver's internal task needs time to reorganize buffers
-    // Channel hopping ensures we receive packets on multiple channels
+    // WHY THIS WORKS (TLSF allocator theory):
+    // The ESP-IDF WiFi task allocates temporary RX/TX buffers per-packet from the
+    // same TLSF heap pool. Each alloc/free cycle triggers TLSF's O(1) immediate
+    // coalescing — adjacent freed blocks merge automatically (Masmano et al. 2004).
+    // Channel hopping ensures packets arrive on each channel, driving the WiFi
+    // task's internal alloc/free churn. After 2-3 seconds, this churn consolidates
+    // scattered free blocks near WiFi driver allocations into larger contiguous
+    // regions. The net effect is that free blocks adjacent to the WiFi driver's
+    // permanent buffers coalesce, recovering contiguous space for TLS (35KB+).
+    // See heap_research.md for Robson bounds proving this is necessary.
     const uint8_t channels[] = {1, 6, 11, 2, 7, 12, 3, 8, 13, 4, 9, 5, 10};
     const uint32_t stepMs = HeapPolicy::kConditioningStepMs;
     uint32_t steps = (dwellMs + stepMs - 1) / stepMs;
@@ -410,6 +418,13 @@ size_t conditionHeapForTLS() {
     return finalLargest;
 }
 
+// Configurable heap conditioning via WiFi promiscuous mode churn.
+// Exploits TLSF's immediate coalescing property: the WiFi task's
+// internal alloc/free cycles during packet processing cause adjacent
+// free blocks to merge, recovering contiguous heap space.
+// BLE cleanup reclaims 20-30KB (NimBLE internal RAM buffers).
+// The delay() calls after BLE deinit give FreeRTOS idle task time
+// to run deferred cleanup callbacks that free BLE memory.
 size_t brewHeap(uint32_t dwellMs, bool includeBleCleanup) {
     size_t initialLargest = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
     size_t initialFree = ESP.getFreeHeap();

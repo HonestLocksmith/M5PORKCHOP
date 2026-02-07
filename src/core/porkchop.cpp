@@ -140,6 +140,10 @@ static void maybeAutoConditionHeap(PorkchopMode mode) {
     if (WiFi.status() == WL_CONNECTED) {
         return;
     }
+    // At Critical pressure (<30KB free), brew needs 35KB transient — would fail anyway
+    if (static_cast<uint8_t>(HeapHealth::getPressureLevel()) > HeapPolicy::kMaxPressureLevelForAutoBrew) {
+        return;
+    }
     if (!HeapHealth::consumeConditionRequest()) {
         return;
     }

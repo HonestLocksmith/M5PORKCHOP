@@ -78,7 +78,7 @@ static std::vector<DetectedNetwork> networks;
 // Deferred Event Processing (avoid allocations in callback)
 // ============================================================================
 
-static const uint8_t PENDING_NET_SLOTS = 4;
+static const uint8_t PENDING_NET_SLOTS = 16;
 static DetectedNetwork pendingNetworks[PENDING_NET_SLOTS];
 static std::atomic<uint8_t> pendingNetWrite{0};
 static std::atomic<uint8_t> pendingNetRead{0};
@@ -123,8 +123,8 @@ static int findNetworkInternal(const uint8_t* bssid) {
 
 static inline int8_t updateRssiAvg(int8_t prev, int8_t sample) {
     if (prev == 0) return sample;
-    int16_t blended = (int16_t)prev * 7 + (int16_t)sample;
-    return (int8_t)(blended / 8);
+    int16_t blended = (int16_t)prev * 3 + (int16_t)sample;
+    return (int8_t)(blended / 4);
 }
 
 static bool enqueuePendingNetwork(const DetectedNetwork& net) {
@@ -201,7 +201,7 @@ static inline uint8_t clientHashIndex(const uint8_t* mac) {
         h ^= mac[i];
         h *= 16777619u;
     }
-    return (uint8_t)(h & 0x3F);
+    return (uint8_t)(h & 0x7F);
 }
 
 static int computeRetentionScore(const DetectedNetwork& net, uint32_t now) {
@@ -323,7 +323,8 @@ static void processBeacon(const uint8_t* payload, uint16_t len, int8_t rssi) {
         net.lastDataSeen = 0;
         net.cooldownUntil = 0;
         net.clientBitset = 0;
-            
+        net.clientBitsetHigh = 0;
+
         // Parse SSID from IE
         uint16_t offset = 36;
         while (offset + 2 < len) {
@@ -540,7 +541,11 @@ static void markDataActivity(const uint8_t* bssid, const uint8_t* clientMac) {
         net.lastDataSeen = millis();
         if (clientMac) {
             uint8_t bit = clientHashIndex(clientMac);
-            net.clientBitset |= (1ULL << bit);
+            if (bit < 64) {
+                net.clientBitset |= (1ULL << bit);
+            } else {
+                net.clientBitsetHigh |= (1ULL << (bit - 64));
+            }
         }
     }
 
@@ -624,7 +629,7 @@ static void promiscuousCallback(void* buf, wifi_promiscuous_pkt_type_t type) {
 }
 
 static void processDeferredEvents() {
-    const uint8_t kMaxAddsPerUpdate = 4;
+    const uint8_t kMaxAddsPerUpdate = 8;
     uint8_t processed = 0;
     DetectedNetwork pending = {};
     
@@ -645,14 +650,16 @@ static void processDeferredEvents() {
         } else if (canGrow &&
                    HeapGates::canGrow(HeapPolicy::kMinHeapForReconGrowth,
                                       HeapPolicy::kMinFragRatioForGrowth)) {
-            // Grow capacity OUTSIDE critical section to avoid heap ops while holding spinlock
-            busy = true;
+            // Grow capacity — spinlock protects vector metadata from concurrent callback access
+            busy.store(true, std::memory_order_release);
+            taskENTER_CRITICAL(&vectorMux);
             try {
                 networks.reserve(networks.capacity() + 20);
             } catch (...) {
                 // OOM - skip growth
             }
-            busy = false;
+            taskEXIT_CRITICAL(&vectorMux);
+            busy.store(false, std::memory_order_release);
             capacityLimit = networks.capacity();
             hasCapacity = networks.size() < capacityLimit;
             shouldAdd = hasCapacity && belowMax;
@@ -722,8 +729,13 @@ static void cleanupStaleNetworks() {
         if (networks[i].lastDataSeen > 0 &&
             now - networks[i].lastDataSeen > CLIENT_BITMAP_RESET_MS) {
             networks[i].clientBitset = 0;
+            networks[i].clientBitsetHigh = 0;
         }
-        if (now - networks[i].lastSeen > STALE_TIMEOUT_MS) {
+        int8_t rssi = (networks[i].rssiAvg != 0) ? networks[i].rssiAvg : networks[i].rssi;
+        uint32_t timeout = STALE_TIMEOUT_MS;  // 60s default (strong signal)
+        if (rssi < -75) timeout = 120000;     // Weak: 2 min
+        else if (rssi < -50) timeout = 90000; // Medium: 1.5 min
+        if (now - networks[i].lastSeen > timeout) {
             staleIndices[staleCount++] = i;
         }
     }
@@ -944,7 +956,9 @@ void update() {
         // Only shrink if capacity exceeds size by a wide margin (avoids thrashing)
         if (networks.capacity() > networks.size() + 40) {
             busy.store(true, std::memory_order_release);
+            taskENTER_CRITICAL(&vectorMux);
             try { networks.shrink_to_fit(); } catch (...) {}
+            taskEXIT_CRITICAL(&vectorMux);
             busy.store(false, std::memory_order_release);
         }
     }
@@ -999,7 +1013,8 @@ uint32_t getPacketCount() {
 }
 
 uint8_t estimateClientCount(const DetectedNetwork& net) {
-    return (uint8_t)__builtin_popcountll(net.clientBitset);
+    return (uint8_t)(__builtin_popcountll(net.clientBitset) +
+                     __builtin_popcountll(net.clientBitsetHigh));
 }
 
 static inline uint8_t scoreRssi(int8_t rssi) {

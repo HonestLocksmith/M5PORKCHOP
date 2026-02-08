@@ -29,6 +29,7 @@ static uint32_t pendingToastMs = 0;
 // Graduated pressure level with hysteresis
 static HeapPressureLevel pressureLevel = HeapPressureLevel::Normal;
 static uint32_t lastPressureChangeMs = 0;
+static uint8_t escalationCount = 0;
 
 // Knuth's Rule metric: free_blocks / allocated_blocks
 static float knuthRatio = 0.0f;
@@ -132,17 +133,23 @@ void update() {
     // --- Graduated pressure level with hysteresis ---
     HeapPressureLevel newLevel = computePressureLevel(freeHeap, fragRatio);
     if (newLevel != pressureLevel) {
-        // Allow immediate escalation (getting worse), but require
-        // hysteresis delay before de-escalation (getting better)
         if (newLevel > pressureLevel) {
-            // Escalating: apply immediately
-            pressureLevel = newLevel;
-            lastPressureChangeMs = now;
+            // Escalating: require 2 consecutive samples (except Critical = immediate)
+            escalationCount++;
+            uint8_t threshold = (newLevel == HeapPressureLevel::Critical) ? 1 : 2;
+            if (escalationCount >= threshold) {
+                pressureLevel = newLevel;
+                lastPressureChangeMs = now;
+                escalationCount = 0;
+            }
         } else if ((now - lastPressureChangeMs) >= HeapPolicy::kPressureHysteresisMs) {
             // De-escalating: only after hysteresis period
             pressureLevel = newLevel;
             lastPressureChangeMs = now;
+            escalationCount = 0;
         }
+    } else {
+        escalationCount = 0;
     }
 
     // --- Adaptive conditioning trigger ---

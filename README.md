@@ -2,7 +2,7 @@
                     Volume Zero, Issue 3, Phile 1 of 1
 
                           M5PORKCHOP README
-                          v0.1.8b-heapkampf
+                          v0.1.8b-PSTH
 
                             ^__^
                             (oo)\_______

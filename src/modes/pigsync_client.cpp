@@ -443,7 +443,7 @@ static volatile bool pendingNameReveal = false;
 static char pendingNameRevealName[16] = {0};
 
 static volatile bool pendingChunkReceived = false;
-static const uint8_t PENDING_CHUNK_QUEUE_SIZE = 4;
+static const uint8_t PENDING_CHUNK_QUEUE_SIZE = 8;
 struct PendingChunkSlot {
     bool used;
     uint16_t seq;
@@ -2074,18 +2074,19 @@ void PigSyncMode::sendReady() {
 
 void PigSyncMode::sendStartSync(uint8_t captureType, uint16_t index) {
     CmdStartSync pkt;
-    initHeader(&pkt.hdr, CMD_START_SYNC, reliability.nextSeq(), reliability.lastRxSeq, sessionId);
+    uint8_t seq = reliability.nextSeq();
+    initHeader(&pkt.hdr, CMD_START_SYNC, seq, reliability.lastRxSeq, sessionId);
     pkt.capture_type = captureType;
     pkt.reserved = 0;
     pkt.index = index;
-    
+
     state = State::WAITING_CHUNKS;
     progress.captureType = captureType;
     progress.captureIndex = index;
     progress.currentChunk = 0;
     progress.inProgress = true;
-    
-    esp_now_send(connectedMac, (uint8_t*)&pkt, sizeof(pkt));
+
+    sendControlPacket(connectedMac, (uint8_t*)&pkt, sizeof(pkt), CMD_START_SYNC, seq);
 }
 
 void PigSyncMode::sendAckChunk(uint16_t seq) {

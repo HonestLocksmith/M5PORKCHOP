@@ -1574,14 +1574,14 @@ static const char* const FATHER_INIT_PHRASES[] = {
     "FATHER//WAKE SEQUENCE COMPLETE",
     "FATHER//CORE ONLINE",
     "FATHER//COLD START OK",
-    "FATHER//READY TO LISTEN",
+    "FATHER//ESP-NOW ARMED",
     "FATHER//SYSTEM GREEN"
 };
 static const char* const FATHER_LISTEN_PHRASES[] = {
     "FATHER//LISTEN CH%02d",
     "FATHER//RECEIVE WINDOW CH%02d",
     "FATHER//QUIET ON CH%02d",
-    "FATHER//OPEN CHANNEL %02d",
+    "FATHER//BROADCAST CH%02d",
     "FATHER//LISTENING CH%02d"
 };
 static const char* const FATHER_PROBE_PHRASES[] = {
@@ -1589,59 +1589,59 @@ static const char* const FATHER_PROBE_PHRASES[] = {
     "FATHER//ECHO SEARCH",
     "FATHER//SON SIGNAL SWEEP",
     "FATHER//SEEKING SON",
-    "FATHER//SCANNING QUIET"
+    "FATHER//BEACON SWEEP"
 };
 static const char* const FATHER_FOUND_PHRASES[] = {
     "FATHER//CONTACTS: %d",
     "FATHER//SIGNALS FOUND: %d",
-    "FATHER//PRESENCE: %d",
+    "FATHER//CALLSIGN: %d",
     "FATHER//SONS FOUND: %d"
 };
 static const char* const FATHER_DIAL_PHRASES[] = {
     "FATHER//DIAL %s",
     "FATHER//CALLING %s",
-    "FATHER//OPEN LINK %s"
+    "FATHER//CMD_HELLO %s"
 };
 static const char* const FATHER_RING_PHRASES[] = {
     "FATHER//INCOMING",
     "FATHER//RINGING",
-    "FATHER//ANSWER WINDOW"
+    "FATHER//RSP_RING RECV"
 };
 static const char* const FATHER_HANDSHAKE_PHRASES[] = {
     "FATHER//HANDSHAKE OK",
     "FATHER//LINK STABLE",
-    "FATHER//LINK ESTABLISHED"
+    "FATHER//LMK VERIFIED"
 };
 static const char* const FATHER_NAME_PHRASES[] = {
     "FATHER//IDENT: %s",
-    "FATHER//SON ID: %s",
+    "FATHER//CALLSIGN: %s",
     "FATHER//NAME REVEALED: %s"
 };
 static const char* const FATHER_LIVE_PHRASES[] = {
     "FATHER//SESSION LIVE",
     "FATHER//SESSION ACTIVE",
-    "FATHER//DATA CHANNEL OPEN"
+    "FATHER//DATA CH LOCKED"
 };
 static const char* const FATHER_TRANSFER_BEGIN_PHRASES[] = {
-    "FATHER//TRANSFER START",
+    "FATHER//CHUNKS INCOMING",
     "FATHER//TRANSFER RUNNING",
     "FATHER//RECEIVE SEQ START"
 };
 static const char* const FATHER_TRANSFER_END_PHRASES[] = {
-    "FATHER//TRANSFER COMPLETE",
+    "FATHER//CRC32 VERIFIED",
     "FATHER//RECEIVE COMPLETE",
     "FATHER//CHANNEL CLOSED"
 };
 static const char* const FATHER_NO_PIGS_PHRASES[] = {
     "FATHER//NO CONTACTS",
-    "FATHER//NO SIGNAL"
+    "FATHER//ZERO BEACONS"
 };
 static const char* const FATHER_IDLE_PHRASES[] = {
     "FATHER//STANDBY",
-    "FATHER//WAITING"
+    "FATHER//IDLE LOOP"
 };
 static const char* const FATHER_ERROR_PHRASES[] = {
-    "FATHER//ERROR: %s",
+    "FATHER//ERR: %s",
     "FATHER//FAULT: %s"
 };
 static const char* const FATHER_EXIST_SINGLE[] = {
@@ -1664,7 +1664,7 @@ static const FatherLinePair FATHER_EXIST_PAIRS[] = {
     { "FATHER//TRANSMISSION NOT A LANGUAGE", "FATHER//TRY ANOTHER CODE" }
 };
 static const char* const FATHER_ARROWS_PHRASES[] = {
-    "FATHER//WHY BLE"
+    "FATHER//SELECT TARGET"
 };
 static const char* const FATHER_HINT_LINE = "FATHER//ARROWS SELECT  ENTER CONNECT";
 static const char* const FATHER_HEADER_DEFAULT = "PIGSYNC::FA/TH/ER";

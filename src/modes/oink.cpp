@@ -125,9 +125,39 @@ struct PendingPMKIDCreate {
     uint8_t pmkid[16];
     char ssid[33];
 };
-static volatile bool pendingPMKIDCreateBusy = false;
-static volatile bool pendingPMKIDCreateReady = false;
-static PendingPMKIDCreate pendingPMKIDCreate;
+static const uint8_t PENDING_PMKID_SLOTS = 4;
+static PendingPMKIDCreate pendingPMKIDPool[PENDING_PMKID_SLOTS];
+static std::atomic<uint8_t> pendingPmkidWrite{0};
+static std::atomic<uint8_t> pendingPmkidRead{0};
+
+static bool enqueuePendingPMKID(const uint8_t* bssid, const uint8_t* station,
+                                 const uint8_t* pmkidData, const char* ssid) {
+    uint8_t write = pendingPmkidWrite.load(std::memory_order_relaxed);
+    uint8_t next = (uint8_t)((write + 1) % PENDING_PMKID_SLOTS);
+    uint8_t read = pendingPmkidRead.load(std::memory_order_acquire);
+    if (next == read) return false;  // Queue full
+    PendingPMKIDCreate& slot = pendingPMKIDPool[write];
+    memcpy(slot.bssid, bssid, 6);
+    memcpy(slot.station, station, 6);
+    memcpy(slot.pmkid, pmkidData, 16);
+    if (ssid && ssid[0] != 0) {
+        strncpy(slot.ssid, ssid, 32);
+        slot.ssid[32] = 0;
+    } else {
+        slot.ssid[0] = 0;
+    }
+    pendingPmkidWrite.store(next, std::memory_order_release);
+    return true;
+}
+
+static bool dequeuePendingPMKID(PendingPMKIDCreate& out) {
+    uint8_t read = pendingPmkidRead.load(std::memory_order_relaxed);
+    uint8_t write = pendingPmkidWrite.load(std::memory_order_acquire);
+    if (read == write) return false;  // Queue empty
+    out = pendingPMKIDPool[read];
+    pendingPmkidRead.store((uint8_t)((read + 1) % PENDING_PMKID_SLOTS), std::memory_order_release);
+    return true;
+}
 
 
 
@@ -316,7 +346,7 @@ void OinkMode::init() {
     consecutiveFailedScans = 0;
     lastBoredUpdate = 0;
     boredStateReset = true;
-    
+
     // Reset static pool tracking (no heap ops - pool is pre-allocated)
     for (int i = 0; i < PENDING_HS_SLOTS; i++) {
         pendingHandshakes[i] = nullptr;
@@ -325,7 +355,9 @@ void OinkMode::init() {
     }
     pendingHsWrite = 0;
     pendingHsRead = 0;
-    
+    pendingPmkidWrite = 0;
+    pendingPmkidRead = 0;
+
     // Free per-handshake beacon memory
     for (auto& hs : handshakes) {
         if (hs.beaconData) {
@@ -468,7 +500,9 @@ void OinkMode::stop() {
     }
     pendingHsWrite = 0;
     pendingHsRead = 0;
-    
+    pendingPmkidWrite = 0;
+    pendingPmkidRead = 0;
+
     running = false;
     Mood::setDialogueLock(false);
     Display::setWiFiStatus(false);
@@ -683,34 +717,30 @@ void OinkMode::update() {
     }
     
     // Process pending PMKID creation (callback queued, we do push_back here)
-    if (pendingPMKIDCreateReady && !pendingPMKIDCreateBusy) {
-        pendingPMKIDCreateBusy = true;  // Prevent callback from overwriting
-        
-        // Create PMKID entry in main thread context
-        int idx = findOrCreatePMKIDSafe(pendingPMKIDCreate.bssid, pendingPMKIDCreate.station);
-        if (idx >= 0 && !pmkids[idx].saved) {
-            memcpy(pmkids[idx].pmkid, pendingPMKIDCreate.pmkid, 16);
-            pmkids[idx].timestamp = millis();
-            
-            // SSID lookup: try callback value first, then lookup from networks
-            if (pendingPMKIDCreate.ssid[0] != 0) {
-                strncpy(pmkids[idx].ssid, pendingPMKIDCreate.ssid, 32);
-                pmkids[idx].ssid[32] = 0;
-            } else {
-                // Try to find SSID from networks vector
-                for (const auto& net : networks()) {
-                    if (memcmp(net.bssid, pendingPMKIDCreate.bssid, 6) == 0) {
-                        strncpy(pmkids[idx].ssid, net.ssid, 32);
-                        pmkids[idx].ssid[32] = 0;
-                        break;
+    {
+        PendingPMKIDCreate pmkidPending = {};
+        while (dequeuePendingPMKID(pmkidPending)) {
+            int idx = findOrCreatePMKIDSafe(pmkidPending.bssid, pmkidPending.station);
+            if (idx >= 0 && !pmkids[idx].saved) {
+                memcpy(pmkids[idx].pmkid, pmkidPending.pmkid, 16);
+                pmkids[idx].timestamp = millis();
+
+                // SSID lookup: try callback value first, then lookup from networks
+                if (pmkidPending.ssid[0] != 0) {
+                    strncpy(pmkids[idx].ssid, pmkidPending.ssid, 32);
+                    pmkids[idx].ssid[32] = 0;
+                } else {
+                    for (const auto& net : networks()) {
+                        if (memcmp(net.bssid, pmkidPending.bssid, 6) == 0) {
+                            strncpy(pmkids[idx].ssid, net.ssid, 32);
+                            pmkids[idx].ssid[32] = 0;
+                            break;
+                        }
                     }
                 }
+                WarhogMode::markCaptured(pmkids[idx].bssid);
             }
-            WarhogMode::markCaptured(pmkids[idx].bssid);
         }
-        
-        pendingPMKIDCreateReady = false;
-        pendingPMKIDCreateBusy = false;
     }
     
     // ============ End Deferred Event Processing ============
@@ -1819,31 +1849,25 @@ void OinkMode::processEAPOL(const uint8_t* payload, uint16_t len,
                         }
                     } else if (pmkIdx < 0) {
                         // New PMKID - queue for creation in main thread
-                        if (!pendingPMKIDCreateBusy && !pendingPMKIDCreateReady) {
-                            memcpy(pendingPMKIDCreate.bssid, bssid, 6);
-                            memcpy(pendingPMKIDCreate.station, station, 6);
-                            memcpy(pendingPMKIDCreate.pmkid, pmkidData, 16);
-                            
-                            // Get SSID from networks if available (with spinlock)
-                            NetworkRecon::enterCritical();
-                            pendingPMKIDCreate.ssid[0] = 0;
-                            for (int ni = 0; ni < (int)networks().size(); ni++) {
-                                if (memcmp(networks()[ni].bssid, bssid, 6) == 0) {
-                                    strncpy(pendingPMKIDCreate.ssid, networks()[ni].ssid, 32);
-                                    pendingPMKIDCreate.ssid[32] = 0;
-                                    break;
-                                }
+                        // Get SSID from networks if available (with spinlock)
+                        char ssidBuf[33] = {0};
+                        NetworkRecon::enterCritical();
+                        for (int ni = 0; ni < (int)networks().size(); ni++) {
+                            if (memcmp(networks()[ni].bssid, bssid, 6) == 0) {
+                                strncpy(ssidBuf, networks()[ni].ssid, 32);
+                                ssidBuf[32] = 0;
+                                break;
                             }
-                            NetworkRecon::exitCritical();
-                            
-                            pendingPMKIDCreateReady = true;
-                            
+                        }
+                        NetworkRecon::exitCritical();
+
+                        if (enqueuePendingPMKID(bssid, station, pmkidData, ssidBuf)) {
                             // Trigger auto-save for PMKID (with backfill retry)
                             pendingAutoSave = true;
-                            
+
                             // Queue the mood event
                             if (!pendingPMKIDCapture) {
-                                strncpy(pendingPMKIDSSID, pendingPMKIDCreate.ssid, 32);
+                                strncpy(pendingPMKIDSSID, ssidBuf, 32);
                                 pendingPMKIDSSID[32] = 0;
                                 pendingPMKIDCapture = true;
                             }

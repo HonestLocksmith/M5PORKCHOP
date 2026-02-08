@@ -36,7 +36,8 @@ struct DetectedNetwork {
     bool isHidden;  // Hidden SSID (needs probe response)
     uint32_t lastDataSeen;     // millis() of most recent client data frame
     uint32_t cooldownUntil;    // millis() until eligible for auto-target
-    uint64_t clientBitset;     // Approximate unique client tracker (bitset)
+    uint64_t clientBitset;     // Approximate unique client tracker (bits 0-63)
+    uint64_t clientBitsetHigh; // Extended client tracker (bits 64-127)
 };
 
 // Frame storage for PCAP export - stores full 802.11 frame with headers

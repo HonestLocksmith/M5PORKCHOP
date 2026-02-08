@@ -31,8 +31,8 @@
 #include <esp_heap_caps.h>
 
 // Bloom filter for seen BSSIDs (fixed memory, no heap churn)
-// 8KB = 65,536 bits -> ~0.8% false positives around 5k entries with 3 hashes
-static const size_t SEEN_BLOOM_BYTES = 8192;
+// 4KB = 32,768 bits -> ~1.5% false positives around 5k entries with 3 hashes
+static const size_t SEEN_BLOOM_BYTES = 4096;
 static const size_t SEEN_BLOOM_BITS = SEEN_BLOOM_BYTES * 8;
 static const size_t SEEN_BLOOM_MASK = SEEN_BLOOM_BITS - 1;
 static const uint8_t SEEN_BLOOM_HASHES = 3;

@@ -688,14 +688,14 @@ WigleSyncResult WiGLE::syncFiles(WigleProgressCallback cb) {
     struct PendingUpload {
         char path[80];
     };
-    static PendingUpload pendingUploads[50];  // Max 50 per sync
+    static PendingUpload pendingUploads[16];  // Max 16 per sync (reduced from 50, saves ~2.7KB BSS)
     uint8_t pendingCount = 0;
-    
+
     File dir = SD.open(wardrivingDir);
     if (dir && dir.isDirectory()) {
         File file = dir.openNextFile();
         uint8_t filesScanned = 0;
-        while (file && pendingCount < 50) {
+        while (file && pendingCount < 16) {
             // Yield every 10 files to prevent WDT
             if (++filesScanned >= 10) {
                 filesScanned = 0;

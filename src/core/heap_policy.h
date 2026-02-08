@@ -88,14 +88,7 @@ namespace HeapPolicy {
     // Stress test guardrail
     static constexpr size_t kStressMinHeap = 70000;
 
-    // Boot conditioning (allocator training)
-    static constexpr int kBootFragBlocks = 50;
-    static constexpr size_t kBootFragBlockSize = 1024;
-    static constexpr int kBootStructBlocks = 20;
-    static constexpr size_t kBootStructBlockSize = 3072;
-    static constexpr size_t kBootTlsTestSizes[3] = {26624, 32768, 40960};
-
-    // Heap conditioning dwell times
+    // Runtime conditioning dwell times (used by OINK Bounce / brewHeap)
     static constexpr uint32_t kConditioningDwellMs = 3000;
     static constexpr uint32_t kConditioningStepMs = 100;
     static constexpr uint32_t kConditioningWarmupMs = 1000;
@@ -119,11 +112,4 @@ namespace HeapPolicy {
     static constexpr uint32_t kNtpMinContig = 8000;
     static constexpr uint32_t kNtpRetryCooldownMs = 60000;
 
-    // Boot conditioning delays
-    static constexpr int kBootFragYieldEvery = 10;
-    static constexpr uint32_t kBootFragYieldDelayMs = 2;
-    static constexpr uint32_t kBootStructAllocDelayMs = 1;
-    static constexpr uint32_t kBootFreeDelayMs = 1;
-    static constexpr uint32_t kBootTlsTestDelayMs = 1;
-    static constexpr uint32_t kBootFinalDelayMs = 200;
 }

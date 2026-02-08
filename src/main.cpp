@@ -6,14 +6,11 @@
 #include <M5Unified.h>
 #include <SD.h>
 #include <WiFi.h>              // <-- PATCH: init WiFi early (before heap fragmentation)
-#include <esp_core_dump.h>
-#include <esp_partition.h>
 #include <esp_heap_caps.h>     // For heap conditioning
 #include <string.h>            // For memset
 #include "core/porkchop.h"
 #include "core/config.h"
 #include "core/xp.h"
-#include "core/sd_layout.h"
 #include "core/sdlog.h"
 #include "core/wifi_utils.h"
 #include "core/heap_policy.h"
@@ -49,246 +46,44 @@ static void preInitWiFiDriverEarly() {
     delay(HeapPolicy::kWiFiModeDelayMs);
 }
 
-static void exportCoreDumpToSD() {
-    if (!Config::isSDAvailable()) {
-        Serial.println("[COREDUMP] SD not available, skipping export");
-        return;
-    }
-
-    esp_err_t check = esp_core_dump_image_check();
-    if (check != ESP_OK) {
-        return;  // No core dump to export
-    }
-
-    const esp_partition_t* part = esp_partition_find_first(
-        ESP_PARTITION_TYPE_DATA,
-        ESP_PARTITION_SUBTYPE_DATA_COREDUMP,
-        nullptr
-    );
-    if (!part) {
-        Serial.println("[COREDUMP] No coredump partition found");
-        return;
-    }
-
-    size_t addr = 0;
-    size_t size = 0;
-    if (esp_core_dump_image_get(&addr, &size) != ESP_OK || size == 0) {
-        Serial.println("[COREDUMP] No coredump image available");
-        return;
-    }
-
-    size_t partOffset = 0;
-    if (addr >= part->address) {
-        partOffset = addr - part->address;
-    }
-    if (partOffset + size > part->size) {
-        Serial.println("[COREDUMP] Image bounds exceed partition size");
-        return;
-    }
-
-    const char* crashDir = SDLayout::crashDir();
-    if (!SD.exists(crashDir)) {
-        SD.mkdir(crashDir);
-    }
-
-    uint32_t stamp = millis();
-    char dumpPath[64];
-    snprintf(dumpPath, sizeof(dumpPath), "%s/coredump_%lu.elf",
-             crashDir, static_cast<unsigned long>(stamp));
-
-    File out = SD.open(dumpPath, FILE_WRITE);
-    if (!out) {
-        Serial.println("[COREDUMP] Failed to open output file");
-        return;
-    }
-
-    const size_t kChunkSize = 512;
-    uint8_t buf[kChunkSize];
-    size_t remaining = size;
-    size_t offset = 0;
-    uint8_t yieldCounter = 0;
-
-    while (remaining > 0) {
-        size_t toRead = remaining > kChunkSize ? kChunkSize : remaining;
-        if (esp_partition_read(part, partOffset + offset, buf, toRead) != ESP_OK) {
-            Serial.println("[COREDUMP] Read failed");
-            break;
-        }
-        out.write(buf, toRead);
-        remaining -= toRead;
-        offset += toRead;
-        
-        // Yield every 8 chunks (4KB) to prevent WDT timeout
-        if (++yieldCounter >= 8) {
-            yieldCounter = 0;
-            yield();
-        }
-    }
-    out.close();
-
-    if (remaining == 0) {
-        Serial.printf("[COREDUMP] Exported %u bytes to %s\n",
-                      static_cast<unsigned int>(size), dumpPath);
-#if CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH && CONFIG_ESP_COREDUMP_DATA_FORMAT_ELF
-        esp_core_dump_summary_t summary;
-        if (esp_core_dump_get_summary(&summary) == ESP_OK) {
-            char sumPath[64];
-                snprintf(sumPath, sizeof(sumPath), "%s/coredump_%lu.txt",
-                     crashDir, static_cast<unsigned long>(stamp));
-            File sum = SD.open(sumPath, FILE_WRITE);
-            if (sum) {
-                sum.printf("task=%s\n", summary.exc_task);
-                sum.printf("pc=0x%08lx\n", static_cast<unsigned long>(summary.exc_pc));
-                sum.printf("bt_depth=%u\n", summary.exc_bt_info.depth);
-                sum.printf("bt_corrupted=%u\n", summary.exc_bt_info.corrupted ? 1 : 0);
-                for (uint32_t i = 0; i < summary.exc_bt_info.depth; i++) {
-                    sum.printf("bt%lu=0x%08lx\n",
-                               static_cast<unsigned long>(i),
-                               static_cast<unsigned long>(summary.exc_bt_info.bt[i]));
-                }
-                sum.printf("exc_cause=0x%08lx\n", static_cast<unsigned long>(summary.ex_info.exc_cause));
-                sum.printf("exc_vaddr=0x%08lx\n", static_cast<unsigned long>(summary.ex_info.exc_vaddr));
-                sum.printf("elf_sha256=%s\n", summary.app_elf_sha256);
-                sum.close();
-            }
-        }
-#endif
-        esp_core_dump_image_erase();
-    } else {
-        Serial.println("[COREDUMP] Export incomplete, keeping core dump in flash");
-    }
-}
-
-// Heap conditioning: exploit TLSF allocator's O(1) immediate coalescing to
-// create large contiguous blocks for TLS (35KB+).
+// Reservation Fence: Force WiFi driver allocations to the TOP of heap,
+// leaving a large contiguous region below for application use.
 //
-// THEORETICAL BASIS (see heap_research.md):
-// - Robson (1974) proved any allocator can need M*log2(max/min) memory in worst case.
-//   For our profile (16B-40KB), that's 11.3x — meaning 35KB TLS could need 395KB
-//   on an adversarial sequence. Since we only have 300KB, we MUST control allocation
-//   ordering to avoid worst-case patterns.
-// - TLSF (Masmano 2004) coalesces adjacent free blocks immediately on free().
-//   This 5-phase alloc-then-free pattern creates adjacent blocks, and the
-//   carefully ordered free sequence maximizes coalescing into large regions.
-// - Johnstone & Wilson (1998) showed best-fit with coalescing needs only 1.2x M.
-//   Our conditioning moves the heap from a potentially adversarial state toward
-//   the benign 1.2x regime by resetting allocation interleaving.
-void performBootHeapConditioning() {
-    Serial.println("[BOOT] Performing aggressive heap conditioning...");
+// Why this works: TLSF's good-fit strategy allocates from the lowest
+// available block. By occupying the bottom 80KB with a fence, the WiFi
+// driver's ~35KB of permanent DMA/RX buffers land above the fence.
+// When we free the fence, the bottom 80KB is contiguous free space.
+//
+// This replaces the old 5-phase alloc/free conditioning dance with a
+// deterministic, 3-line pattern that's both simpler and more effective.
+static void setupHeapLayout() {
+    size_t beforeFree = ESP.getFreeHeap();
+    size_t beforeLargest = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+    Serial.printf("[BOOT] Pre-fence heap: free=%u largest=%u\n",
+                  (unsigned)beforeFree, (unsigned)beforeLargest);
 
-    // Log initial heap state
-    size_t initialLargest = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
-    size_t initialFree = ESP.getFreeHeap();
-    Serial.printf("[BOOT] Initial heap: free=%u largest=%u\n", initialFree, initialLargest);
-
-    // Phase 1: Create fragmentation pattern (mimics Oink mode startup)
-    const int FRAG_BLOCKS = HeapPolicy::kBootFragBlocks;
-    const size_t FRAG_SIZE = HeapPolicy::kBootFragBlockSize; // 1KB blocks
-    void* fragBlocks[FRAG_BLOCKS] = {nullptr};
-    size_t fragAllocated = 0;
-
-    Serial.println("[BOOT] Phase 1: Creating fragmentation...");
-    for (int i = 0; i < FRAG_BLOCKS; i++) {
-        fragBlocks[i] = malloc(FRAG_SIZE);
-        if (fragBlocks[i]) {
-            memset(fragBlocks[i], 0xAA, FRAG_SIZE);
-            fragAllocated++;
-        }
-        if (i % HeapPolicy::kBootFragYieldEvery == 0) {
-            delay(HeapPolicy::kBootFragYieldDelayMs); // Periodic yield
-        }
-    }
-    Serial.printf("[BOOT] Fragmentation: %u/%u blocks (%uKB)\n", fragAllocated, FRAG_BLOCKS, (fragAllocated * FRAG_SIZE) / 1024);
-
-    // Phase 2: Add larger blocks (like network structures in Oink)
-    const int STRUCT_BLOCKS = HeapPolicy::kBootStructBlocks;
-    const size_t STRUCT_SIZE = HeapPolicy::kBootStructBlockSize; // ~3KB (like DetectedNetwork + clients)
-    void* structBlocks[STRUCT_BLOCKS] = {nullptr};
-    size_t structAllocated = 0;
-
-    Serial.println("[BOOT] Phase 2: Adding structure blocks...");
-    for (int i = 0; i < STRUCT_BLOCKS; i++) {
-        structBlocks[i] = malloc(STRUCT_SIZE);
-        if (structBlocks[i]) {
-            memset(structBlocks[i], 0xBB, STRUCT_SIZE);
-            structAllocated++;
-        }
-        delay(HeapPolicy::kBootStructAllocDelayMs);
-    }
-    Serial.printf("[BOOT] Structures: %u/%u blocks (%uKB)\n", structAllocated, STRUCT_BLOCKS, (structAllocated * STRUCT_SIZE) / 1024);
-
-    // Phase 3: Free in consolidation-friendly pattern
-    Serial.println("[BOOT] Phase 3: Consolidating memory...");
-
-    // Free structure blocks first (creates large holes)
-    for (int i = 0; i < STRUCT_BLOCKS; i++) {
-        if (structBlocks[i]) {
-            free(structBlocks[i]);
-            structBlocks[i] = nullptr;
-        }
-    }
-
-    // Free fragmentation blocks in mixed order
-    for (int i = FRAG_BLOCKS - 1; i >= 0; i -= 2) { // Free every other block backwards
-        if (fragBlocks[i]) {
-            free(fragBlocks[i]);
-            fragBlocks[i] = nullptr;
-        }
-        delay(HeapPolicy::kBootFreeDelayMs);
-    }
-
-    // Free remaining fragmentation blocks
-    for (int i = 0; i < FRAG_BLOCKS; i++) {
-        if (fragBlocks[i]) {
-            free(fragBlocks[i]);
-            fragBlocks[i] = nullptr;
-        }
-    }
-
-    // Phase 4: Test TLS-sized allocations
-    Serial.println("[BOOT] Phase 4: Testing TLS compatibility...");
-    const size_t* TLS_SIZES = HeapPolicy::kBootTlsTestSizes; // 26KB, 32KB, 40KB
-    const char* TLS_NAMES[] = {"26KB", "32KB", "40KB"};
-
-    for (int i = 0; i < 3; i++) {
-        void* tlsTest = malloc(TLS_SIZES[i]);
-        if (tlsTest) {
-            memset(tlsTest, 0xCC, TLS_SIZES[i]);
-            Serial.printf("[BOOT] ✓ %s allocation successful\n", TLS_NAMES[i]);
-            free(tlsTest);
-        } else {
-            Serial.printf("[BOOT] ❌ %s allocation failed\n", TLS_NAMES[i]);
-        }
-        delay(HeapPolicy::kBootTlsTestDelayMs);
-    }
-
-    // Phase 5: Final consolidation with longer delay
-    Serial.println("[BOOT] Phase 5: Final consolidation...");
-    delay(HeapPolicy::kBootFinalDelayMs);
-    yield();
-
-    // Log final heap state
-    size_t finalLargest = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
-    size_t finalFree = ESP.getFreeHeap();
-    float improvement = finalLargest > initialLargest ? (float)finalLargest / initialLargest : 1.0f;
-
-    Serial.printf("[BOOT] Final heap: free=%u largest=%u (%.2fx improvement)\n",
-                  finalFree, finalLargest, improvement);
-
-    // Check TLS compatibility
-    const size_t tlsGate = HeapPolicy::kMinContigForTls;
-    if (finalLargest >= tlsGate) {
-        Serial.println("[BOOT] ✓ Heap conditioning successful - TLS operations should work");
-    } else if (improvement > 1.0f) {
-        Serial.printf("[BOOT] ⚠ Partial improvement - largest block=%u (need %u for TLS)\n",
-                      (unsigned)finalLargest, (unsigned)tlsGate);
+    // Allocate fence to push WiFi driver allocations high in the heap
+    static constexpr size_t kFenceSize = 80000;
+    void* fence = heap_caps_malloc(kFenceSize, MALLOC_CAP_8BIT);
+    if (fence) {
+        Serial.printf("[BOOT] Fence allocated: %u bytes at %p\n",
+                      (unsigned)kFenceSize, fence);
     } else {
-        Serial.printf("[BOOT] ❌ No improvement - largest block=%u (need %u for TLS)\n",
-                      (unsigned)finalLargest, (unsigned)tlsGate);
+        Serial.println("[BOOT] WARNING: Fence allocation failed, falling back to direct init");
     }
 
-    Serial.printf("[BOOT] Total conditioned: ~%u KB\n",
-                  (fragAllocated * FRAG_SIZE + structAllocated * STRUCT_SIZE) / 1024);
+    // WiFi driver allocates its permanent DMA/RX buffers ABOVE the fence
+    preInitWiFiDriverEarly();
+
+    // Release the fence — leaves large contiguous space below WiFi driver
+    if (fence) {
+        heap_caps_free(fence);
+    }
+
+    size_t afterFree = ESP.getFreeHeap();
+    size_t afterLargest = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+    Serial.printf("[BOOT] Post-fence heap: free=%u largest=%u\n",
+                  (unsigned)afterFree, (unsigned)afterLargest);
 }
 
 void setup() {
@@ -311,9 +106,10 @@ void setup() {
     // Configure G0 button (GPIO0) as input with pullup
     pinMode(0, INPUT_PULLUP);
 
-    // --- PATCH: Initialize WiFi driver BEFORE config/display allocate big chunks
-    // This dramatically reduces "esp_wifi_init 257" failures on reconnect later.
-    preInitWiFiDriverEarly();
+    // Reservation fence: push WiFi driver allocations high in heap, then free
+    // the fence to leave large contiguous space at the bottom.
+    // Replaces the old 5-phase boot conditioning with a deterministic layout.
+    setupHeapLayout();
 
     // Load configuration from SD
     if (!Config::init()) {
@@ -322,13 +118,6 @@ void setup() {
 
     // Init SD logging (will be enabled via settings if user wants)
     SDLog::init();
-
-    // Export any stored core dump to SD (if present)
-    exportCoreDumpToSD();
-
-    // Perform heap conditioning to consolidate memory (like Oink mode does)
-    // This creates larger contiguous blocks needed for TLS operations
-    performBootHeapConditioning();
 
     // Load previous session watermarks before resetting peaks
     HeapHealth::loadPreviousSession();

@@ -8,6 +8,7 @@
 #include "../web/fileserver.h"
 #include <SD.h>
 #include <esp_task_wdt.h>
+#include <esp_heap_caps.h>
 
 // FATFS (ESP-IDF) headers may not exist in all Arduino builds.
 // Guard format APIs to avoid compile errors.
@@ -230,12 +231,16 @@ bool fullErase(uint8_t pdrv, const DiskGeometry& geo, SDFormat::ProgressCallback
     eraseProgress.bytesPerSecond = 0;
     eraseProgress.stageWithEta[0] = '\0';
 
-    // Erase buffer - explicitly zero to avoid stale data
-    static uint8_t zeroBuf[4096];
-    memset(zeroBuf, 0, sizeof(zeroBuf));
+    // Erase buffer - heap allocated, freed at function exit
+    uint8_t* zeroBuf = (uint8_t*)heap_caps_malloc(4096, MALLOC_CAP_8BIT);
+    if (!zeroBuf) return false;
+    memset(zeroBuf, 0, 4096);
 
-    const uint32_t sectorsPerChunk = static_cast<uint32_t>(sizeof(zeroBuf) / geo.sectorSize);
-    if (sectorsPerChunk == 0) return false;
+    const uint32_t sectorsPerChunk = static_cast<uint32_t>(4096 / geo.sectorSize);
+    if (sectorsPerChunk == 0) {
+        heap_caps_free(zeroBuf);
+        return false;
+    }
 
     uint64_t written = 0;
     uint8_t lastPercent = 255;
@@ -253,7 +258,7 @@ bool fullErase(uint8_t pdrv, const DiskGeometry& geo, SDFormat::ProgressCallback
 
         // Write with retry logic for reliability
         if (!writeWithRetry(pdrv, zeroBuf, static_cast<DWORD>(written), static_cast<UINT>(todo))) {
-            // All retries failed - report failure
+            heap_caps_free(zeroBuf);
             return false;
         }
 
@@ -306,6 +311,7 @@ bool fullErase(uint8_t pdrv, const DiskGeometry& geo, SDFormat::ProgressCallback
     disk_ioctl(pdrv, CTRL_SYNC, nullptr);
     delay(kSyncSettleMs);  // Allow card controller to settle
 
+    heap_caps_free(zeroBuf);
     return true;
 }
 
@@ -332,16 +338,18 @@ bool fatfsFormat(uint8_t pdrv, uint64_t cardBytes, DWORD sectorSize) {
     BYTE opt = FM_FAT32;
 #endif
 
-    static uint8_t workbuf[4096];
-    memset(workbuf, 0, sizeof(workbuf));
+    uint8_t* workbuf = (uint8_t*)heap_caps_malloc(4096, MALLOC_CAP_8BIT);
+    if (!workbuf) return false;
+    memset(workbuf, 0, 4096);
 
 #if FF_MULTI_PARTITION
     if (cardBytes > kMaxFormatBytes) {
-        if (!partitionToMax32GiB(pdrv, sectorSize, cardBytes, workbuf, sizeof(workbuf))) {
+        if (!partitionToMax32GiB(pdrv, sectorSize, cardBytes, workbuf, 4096)) {
+            heap_caps_free(workbuf);
             return false;
         }
         // Re-zero workbuf after partitioning
-        memset(workbuf, 0, sizeof(workbuf));
+        memset(workbuf, 0, 4096);
     }
 #endif
 
@@ -349,14 +357,15 @@ bool fatfsFormat(uint8_t pdrv, uint64_t cardBytes, DWORD sectorSize) {
     esp_task_wdt_reset();
 
 #if defined(MKFS_PARM)
-    FRESULT fr = f_mkfs(drive, &opt, workbuf, sizeof(workbuf));
+    FRESULT fr = f_mkfs(drive, &opt, workbuf, 4096);
 #else
-    FRESULT fr = f_mkfs(drive, opt, auSize, workbuf, sizeof(workbuf));
+    FRESULT fr = f_mkfs(drive, opt, auSize, workbuf, 4096);
 #endif
 
     // Reset WDT after mkfs completes
     esp_task_wdt_reset();
 
+    heap_caps_free(workbuf);
     return fr == FR_OK;
 }
 

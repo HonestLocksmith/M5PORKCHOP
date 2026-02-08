@@ -55,29 +55,39 @@ void BoarBrosMenu::loadBros() {
     }
     
     // Cap at 50 entries (same as MAX_BOAR_BROS in oink.cpp)
+    // Use stack buffer instead of String to avoid 50 heap alloc/free cycles
+    char lineBuf[80];  // BSSID(12) + space + SSID(32) + margin
     while (f.available() && bros.size() < 50) {
-        String line = f.readStringUntil('\n');
-        line.trim();
-        
+        int len = f.readBytesUntil('\n', lineBuf, sizeof(lineBuf) - 1);
+        if (len <= 0) continue;
+        lineBuf[len] = '\0';
+
+        // Trim trailing whitespace
+        while (len > 0 && (lineBuf[len-1] == '\r' || lineBuf[len-1] == ' ' || lineBuf[len-1] == '\t')) {
+            lineBuf[--len] = '\0';
+        }
+
+        // Skip leading whitespace
+        const char* p = lineBuf;
+        while (*p == ' ' || *p == '\t') p++;
+        len = strlen(p);
+
         // Skip empty lines and comments
-        if (line.length() == 0 || line.startsWith("#")) continue;
-        
+        if (len == 0 || *p == '#') continue;
+
         // Format: AABBCCDDEEFF [SSID]
-        if (line.length() >= 12) {
-            String hexBssid = line.substring(0, 12);
-            hexBssid.toUpperCase();
-            
+        if (len >= 12) {
             uint64_t bssid = 0;
             bool valid = true;
             for (int i = 0; i < 12; i++) {
-                char c = hexBssid.charAt(i);
+                char c = toupper((unsigned char)p[i]);
                 uint8_t nibble;
                 if (c >= '0' && c <= '9') nibble = c - '0';
                 else if (c >= 'A' && c <= 'F') nibble = c - 'A' + 10;
                 else { valid = false; break; }
                 bssid = (bssid << 4) | nibble;
             }
-            
+
             if (valid) {
                 BroInfo info;
                 memset(&info, 0, sizeof(info));
@@ -85,10 +95,12 @@ void BoarBrosMenu::loadBros() {
                 formatBSSID(bssid, info.bssidStr, sizeof(info.bssidStr));
 
                 // Extract SSID from rest of line (after space)
-                if (line.length() > 13) {
-                    String ssidPart = line.substring(13);
-                    ssidPart.trim();
-                    strncpy(info.ssid, ssidPart.c_str(), sizeof(info.ssid) - 1);
+                if (len > 13) {
+                    const char* ssid = p + 13;
+                    while (*ssid == ' ' || *ssid == '\t') ssid++;
+                    if (*ssid) {
+                        strncpy(info.ssid, ssid, sizeof(info.ssid) - 1);
+                    }
                 }
 
                 bros.push_back(info);

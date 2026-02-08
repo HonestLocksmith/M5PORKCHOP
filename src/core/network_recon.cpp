@@ -36,6 +36,7 @@ static std::atomic<bool> busy{false};  // [BUG3 FIX] Atomic for cross-core visib
 static std::atomic<uint32_t> hopIntervalOverrideMs{0};
 static size_t heapLargestAtStart = 0;
 static bool heapStabilized = false;
+static uint8_t shrinkDeferCount = 0;  // Hysteresis counter to prevent shrink/grow thrashing
 
 // Channel hop order (most common channels first for faster discovery)
 static const uint8_t CHANNEL_HOP_ORDER[RECON_CHANNEL_COUNT] = {
@@ -650,11 +651,14 @@ static void processDeferredEvents() {
         } else if (canGrow &&
                    HeapGates::canGrow(HeapPolicy::kMinHeapForReconGrowth,
                                       HeapPolicy::kMinFragRatioForGrowth)) {
-            // Grow capacity — spinlock protects vector metadata from concurrent callback access
+            // Grow capacity in aligned steps to reduce fragmentation from
+            // differently-sized blocks. Round up to next multiple of 40.
+            size_t newCap = ((networks.capacity() + 40) / 40) * 40;
+            if (newCap > MAX_RECON_NETWORKS) newCap = MAX_RECON_NETWORKS;
             busy.store(true, std::memory_order_release);
             taskENTER_CRITICAL(&vectorMux);
             try {
-                networks.reserve(networks.capacity() + 20);
+                networks.reserve(newCap);
             } catch (...) {
                 // OOM - skip growth
             }
@@ -953,13 +957,21 @@ void update() {
         lastCleanupTime = now;
 
         // Reclaim over-provisioned capacity to reduce heap fragmentation
-        // Only shrink if capacity exceeds size by a wide margin (avoids thrashing)
+        // Hysteresis: require 3 consecutive cleanup cycles with excess capacity
+        // before shrinking. This prevents grow/shrink thrashing when network
+        // count oscillates (each cycle reallocates a ~17KB block).
         if (networks.capacity() > networks.size() + 40) {
-            busy.store(true, std::memory_order_release);
-            taskENTER_CRITICAL(&vectorMux);
-            try { networks.shrink_to_fit(); } catch (...) {}
-            taskEXIT_CRITICAL(&vectorMux);
-            busy.store(false, std::memory_order_release);
+            shrinkDeferCount++;
+            if (shrinkDeferCount >= 3) {
+                busy.store(true, std::memory_order_release);
+                taskENTER_CRITICAL(&vectorMux);
+                try { networks.shrink_to_fit(); } catch (...) {}
+                taskEXIT_CRITICAL(&vectorMux);
+                busy.store(false, std::memory_order_release);
+                shrinkDeferCount = 0;
+            }
+        } else {
+            shrinkDeferCount = 0;
         }
     }
     

@@ -7,7 +7,7 @@
 #include <WiFiClientSecure.h>
 #include <ArduinoJson.h>
 #include <esp_heap_caps.h>
-#include <base64.h>
+#include <mbedtls/base64.h>
 #include "../core/config.h"
 #include "../core/sd_layout.h"
 #include "../core/heap_gates.h"
@@ -17,7 +17,7 @@
 #include "../piglet/mood.h"
 
 // Static member initialization
-std::vector<String> WiGLE::uploadedFiles;
+std::vector<WiGLE::UploadedFile> WiGLE::uploadedFiles;
 bool WiGLE::listLoaded = false;
 volatile bool WiGLE::busy = false;
 char WiGLE::lastError[64] = "";
@@ -48,7 +48,7 @@ bool WiGLE::loadUploadedList() {
     if (listLoaded) return true;
 
     uploadedFiles.clear();
-    uploadedFiles.reserve(WIGLE_MAX_UPLOADED);
+    uploadedFiles.reserve(32);  // Grow naturally — avoid 200-entry upfront alloc
 
     const char* uploadedPath = SDLayout::wigleUploadedPath();
     if (!SD.exists(uploadedPath)) {
@@ -60,10 +60,16 @@ bool WiGLE::loadUploadedList() {
     if (!f) return false;
 
     while (f.available() && uploadedFiles.size() < WIGLE_MAX_UPLOADED) {
-        String line = f.readStringUntil('\n');
-        line.trim();
-        if (!line.isEmpty() && line.length() < 100) {
-            uploadedFiles.push_back(line);
+        char buf[48];
+        int n = f.readBytesUntil('\n', buf, sizeof(buf) - 1);
+        buf[n] = '\0';
+        // Trim trailing whitespace
+        while (n > 0 && (buf[n-1] == ' ' || buf[n-1] == '\r' || buf[n-1] == '\t')) buf[--n] = '\0';
+        if (n > 0) {
+            UploadedFile entry;
+            strncpy(entry.name, buf, sizeof(entry.name) - 1);
+            entry.name[sizeof(entry.name) - 1] = '\0';
+            uploadedFiles.push_back(entry);
         }
     }
 
@@ -78,8 +84,8 @@ bool WiGLE::saveUploadedList() {
     File f = SD.open(uploadedPath, FILE_WRITE);
     if (!f) return false;
 
-    for (const auto& filename : uploadedFiles) {
-        f.println(filename);
+    for (const auto& entry : uploadedFiles) {
+        f.println(entry.name);
     }
 
     f.close();
@@ -94,24 +100,20 @@ void WiGLE::freeUploadedListMemory() {
     Serial.printf("[WIGLE] Freed uploaded list: %u entries\n", (unsigned int)count);
 }
 
-String WiGLE::getFilenameFromPath(const char* path) {
-    String fullPath = path ? path : "";
-    int lastSlash = fullPath.lastIndexOf('/');
-    if (lastSlash >= 0) {
-        return fullPath.substring(lastSlash + 1);
-    }
-    return fullPath;
+const char* WiGLE::getFilenameFromPath(const char* path) {
+    if (!path) return "";
+    const char* slash = strrchr(path, '/');
+    return slash ? slash + 1 : path;
 }
 
 bool WiGLE::isUploaded(const char* filename) {
     if (!filename) return false;
     loadUploadedList();
 
-    String fullPath = String(filename);
-    String baseName = getFilenameFromPath(filename);
+    const char* baseName = getFilenameFromPath(filename);
 
-    for (const auto& f : uploadedFiles) {
-        if (f.equals(fullPath) || f.equals(baseName)) return true;
+    for (const auto& entry : uploadedFiles) {
+        if (strcmp(entry.name, filename) == 0 || strcmp(entry.name, baseName) == 0) return true;
     }
     return false;
 }
@@ -119,19 +121,22 @@ bool WiGLE::isUploaded(const char* filename) {
 void WiGLE::markAsUploaded(const char* filename) {
     if (!filename) return;
     loadUploadedList();
-    
-    String baseName = getFilenameFromPath(filename);
-    
+
+    const char* baseName = getFilenameFromPath(filename);
+
     // Check if already in list
-    for (const auto& f : uploadedFiles) {
-        if (f.equals(baseName)) return;
+    for (const auto& entry : uploadedFiles) {
+        if (strcmp(entry.name, baseName) == 0) return;
     }
-    
+
     if (uploadedFiles.size() >= WIGLE_MAX_UPLOADED) {
         // Cap in-memory list to avoid unbounded heap growth.
         return;
     }
-    uploadedFiles.push_back(baseName);
+    UploadedFile entry;
+    strncpy(entry.name, baseName, sizeof(entry.name) - 1);
+    entry.name[sizeof(entry.name) - 1] = '\0';
+    uploadedFiles.push_back(entry);
     if (!batchMode) {
         saveUploadedList();  // Only save immediately if not in batch mode
     }
@@ -153,12 +158,11 @@ void WiGLE::removeFromUploaded(const char* filename) {
     if (!filename) return;
     loadUploadedList();
 
-    String fullPath = String(filename);
-    String baseName = getFilenameFromPath(filename);
+    const char* baseName = getFilenameFromPath(filename);
 
     bool changed = false;
     for (auto it = uploadedFiles.begin(); it != uploadedFiles.end(); ) {
-        if (it->equals(fullPath) || it->equals(baseName)) {
+        if (strcmp(it->name, filename) == 0 || strcmp(it->name, baseName) == 0) {
             it = uploadedFiles.erase(it);
             changed = true;
         } else {
@@ -271,18 +275,23 @@ bool WiGLE::uploadSingleFile(const char* csvPath) {
     const char* filename = strrchr(csvPath, '/');
     filename = filename ? filename + 1 : csvPath;
 
-    // Build Basic Auth header — minimize String lifetime
+    // Build Basic Auth header on stack — no heap allocation during TLS window
     char credBuf[132];  // wigleApiName(64) + ":" + wigleApiToken(64) + NUL
     snprintf(credBuf, sizeof(credBuf), "%s:%s",
              Config::wifi().wigleApiName, Config::wifi().wigleApiToken);
-    String authHeader = "Basic " + base64::encode(credBuf);
-    
+    char b64Buf[180];   // ceil(132/3)*4 = 176 + NUL
+    size_t b64Len = 0;
+    mbedtls_base64_encode((unsigned char*)b64Buf, sizeof(b64Buf), &b64Len,
+                          (const unsigned char*)credBuf, strlen(credBuf));
+    char authHeader[192];  // "Basic " + b64 + NUL
+    snprintf(authHeader, sizeof(authHeader), "Basic %s", b64Buf);
+
     // Create WiFiClientSecure with minimal buffers
     WiFiClientSecure client;
     client.setInsecure();  // Skip cert validation - saves ~10KB heap
     // NOTE: setNoDelay()/setTimeout() before connect() causes EBADF errors
     // Socket doesn't exist yet - those calls require an active socket
-    
+
     // Connect with timeout (15s)
     Serial.printf("[WIGLE] Connecting to %s:%d\n", API_HOST, API_PORT);
     if (!client.connect(API_HOST, API_PORT, 15000)) {
@@ -469,11 +478,16 @@ bool WiGLE::uploadSingleFile(const char* csvPath) {
 bool WiGLE::fetchStats() {
     Serial.println("[WIGLE] Fetching user stats...");
     
-    // Build Basic Auth header — minimize String lifetime
+    // Build Basic Auth header on stack — no heap allocation during TLS window
     char credBuf[132];
     snprintf(credBuf, sizeof(credBuf), "%s:%s",
              Config::wifi().wigleApiName, Config::wifi().wigleApiToken);
-    String authHeader = "Basic " + base64::encode(credBuf);
+    char b64Buf[180];
+    size_t b64Len = 0;
+    mbedtls_base64_encode((unsigned char*)b64Buf, sizeof(b64Buf), &b64Len,
+                          (const unsigned char*)credBuf, strlen(credBuf));
+    char authHeader[192];
+    snprintf(authHeader, sizeof(authHeader), "Basic %s", b64Buf);
     
     // Create WiFiClientSecure
     WiFiClientSecure client;
@@ -759,16 +773,17 @@ WigleSyncResult WiGLE::syncFiles(WigleProgressCallback cb) {
         loadUploadedList();
         for (uint8_t i = 0; i < pendingCount; i++) {
             if (successMask[i]) {
-                String baseName = getFilenameFromPath(pendingUploads[i].path);
+                const char* baseName = getFilenameFromPath(pendingUploads[i].path);
                 // Check if already in list (avoid duplicates)
                 bool found = false;
-                for (const auto& f : uploadedFiles) {
-                    if (f.equals(baseName)) { found = true; break; }
+                for (const auto& entry : uploadedFiles) {
+                    if (strcmp(entry.name, baseName) == 0) { found = true; break; }
                 }
-                if (!found) {
-                    if (uploadedFiles.size() < WIGLE_MAX_UPLOADED) {
-                        uploadedFiles.push_back(baseName);
-                    }
+                if (!found && uploadedFiles.size() < WIGLE_MAX_UPLOADED) {
+                    UploadedFile entry;
+                    strncpy(entry.name, baseName, sizeof(entry.name) - 1);
+                    entry.name[sizeof(entry.name) - 1] = '\0';
+                    uploadedFiles.push_back(entry);
                 }
             }
         }

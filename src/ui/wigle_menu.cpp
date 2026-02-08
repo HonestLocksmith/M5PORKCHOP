@@ -113,7 +113,7 @@ void WigleMenu::hide() {
 void WigleMenu::scanFiles() {
     // Initialize async scan
     files.clear();
-    files.reserve(50);
+    files.reserve(8);  // Grow naturally — reserve(50) was 6.8KB contiguous
     
     if (!Config::isSDAvailable()) {
         Serial.println("[WIGLE_MENU] SD card not available");
@@ -179,15 +179,16 @@ void WigleMenu::processAsyncScan() {
         }
         
         if (!currentFile.isDirectory()) {
-            String name = currentFile.name();
+            const char* name = currentFile.name();
+            size_t nameLen = strlen(name);
             // Only show WiGLE format files (*.wigle.csv)
-            if (name.endsWith(".wigle.csv")) {
+            if (nameLen > 10 && strcmp(name + nameLen - 10, ".wigle.csv") == 0) {
                 WigleFileInfo info;
                 memset(&info, 0, sizeof(info));
-                int slash = name.lastIndexOf('/');
-                String base = (slash >= 0) ? name.substring(slash + 1) : name;
-                strncpy(info.filename, base.c_str(), sizeof(info.filename) - 1);
-                snprintf(info.fullPath, sizeof(info.fullPath), "%s/%s", SDLayout::wardrivingDir(), base.c_str());
+                const char* slash = strrchr(name, '/');
+                const char* base = slash ? slash + 1 : name;
+                strncpy(info.filename, base, sizeof(info.filename) - 1);
+                snprintf(info.fullPath, sizeof(info.fullPath), "%s/%s", SDLayout::wardrivingDir(), base);
                 info.fileSize = currentFile.size();
                 // Estimate network count: ~150 bytes per line after header
                 info.networkCount = info.fileSize > 300 ? (info.fileSize - 300) / 150 : 0;

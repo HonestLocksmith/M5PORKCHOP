@@ -89,8 +89,11 @@ public:
     static const char* getLastError();
     
 private:
-    // Uploaded files tracking
-    static std::vector<String> uploadedFiles;
+    // Uploaded files tracking — flat struct avoids per-entry String heap allocs
+    struct UploadedFile {
+        char name[48];
+    };
+    static std::vector<UploadedFile> uploadedFiles;
     static bool listLoaded;  // Guard for lazy loading
     static volatile bool busy;
     static char lastError[64];
@@ -105,7 +108,7 @@ private:
     // Helpers
     static bool loadUploadedList();
     static bool saveUploadedList();
-    static String getFilenameFromPath(const char* path);
+    static const char* getFilenameFromPath(const char* path);
     
     // Network helpers (internal)
     static bool uploadSingleFile(const char* csvPath);

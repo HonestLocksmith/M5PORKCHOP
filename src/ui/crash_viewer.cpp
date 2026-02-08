@@ -67,22 +67,23 @@ void CrashViewer::scanCrashFiles() {
         if (!entry) break;
 
         if (!entry.isDirectory()) {
-            String name = entry.name();
+            const char* name = entry.name();
             time_t lastWrite = entry.getLastWrite();
             entry.close();
 
-            if (!name.endsWith(".txt")) {
+            // Check .txt extension without String
+            size_t nameLen = strlen(name);
+            if (nameLen < 4 || strcmp(name + nameLen - 4, ".txt") != 0) {
                 continue;
             }
 
-            String base = name;
-            int slash = base.lastIndexOf('/');
-            if (slash >= 0) {
-                base = base.substring(slash + 1);
-            }
+            // Extract basename without String
+            const char* base = strrchr(name, '/');
+            base = base ? base + 1 : name;
+
             CrashEntry entryInfo;
             memset(&entryInfo, 0, sizeof(entryInfo));
-            snprintf(entryInfo.path, sizeof(entryInfo.path), "%s/%s", crashDir, base.c_str());
+            snprintf(entryInfo.path, sizeof(entryInfo.path), "%s/%s", crashDir, base);
             entryInfo.timestamp = lastWrite;
             crashFiles.push_back(entryInfo);
         } else {

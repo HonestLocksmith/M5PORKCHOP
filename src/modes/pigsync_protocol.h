@@ -51,7 +51,7 @@ static const uint8_t PIGSYNC_LMK[16] = {
 // ==[ RELIABILITY ]==
 #define PIGSYNC_ACK_TIMEOUT         500     // ms to wait for ACK (increased from 200)
 #define PIGSYNC_MAX_RETRIES         3       // retries before failure
-#define PIGSYNC_SEQ_WINDOW          16      // duplicate detection window
+#define PIGSYNC_SEQ_WINDOW          64      // duplicate detection window
 
 // ==[ WIFI CHANNEL ]==
 #define PIGSYNC_DISCOVERY_CHANNEL   1       // Discovery always on channel 1

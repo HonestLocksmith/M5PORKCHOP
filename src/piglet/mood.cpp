@@ -108,33 +108,34 @@ static int8_t lastChargingState = -1;      // -1=unknown, 0=not charging, 1=char
 
 // Idea 1: Heap pressure phrases
 static const char* const PHRASES_HEAP_CAUTION[] = {
-    "heap getting tight",
-    "memory sweating",
-    "feeling cramped innit",
-    "malloc side-eyeing me"
+    "heap squeezing innit",
+    "malloc side-eyeing me",
+    "SRAM getting personal",
+    "300KB was never enough",
+    "fragments forming bruv"
 };
-static const int PHRASES_HEAP_CAUTION_COUNT = 4;
+static const int PHRASES_HEAP_CAUTION_COUNT = 5;
 
 static const char* const PHRASES_HEAP_WARNING[] = {
-    "heap hurting bad",
     "oi wheres me RAM",
+    "TLSF sweating proper",
     "bones creaking bruv",
-    "fragments everywhere",
-    "pig needs space"
+    "35KB contiguous? good luck",
+    "pig smells fragmentation"
 };
 static const int PHRASES_HEAP_WARNING_COUNT = 5;
 
 static const char* const PHRASES_HEAP_CRITICAL[] = {
-    "CRITICAL. PIG SCARED.",
-    "CANT BREATHE",
-    "HEAP ON LIFE SUPPORT",
-    "MALLOC SAYS GOODBYE"
+    "MALLOC SAYS GOODBYE",
+    "PIG CANT MALLOC. PIG SCARED.",
+    "0 BYTES LEFT. SEND HELP.",
+    "HEAP FLATLINED BRUV"
 };
 static const int PHRASES_HEAP_CRITICAL_COUNT = 4;
 
 static const char* const PHRASES_HEAP_RECOVERY[] = {
-    "breathing again",
-    "RAM came back. pig lives.",
+    "TLSF coalesced. pig lives.",
+    "free blocks returned. praise.",
     "defrag worked. praise."
 };
 static const int PHRASES_HEAP_RECOVERY_COUNT = 3;
@@ -142,7 +143,7 @@ static const int PHRASES_HEAP_RECOVERY_COUNT = 3;
 // Idea 2: Time-of-day phrases (personality-split)
 static const char* const PHRASES_TIME_EARLY_OINK[] = {
     "proper early bruv",
-    "dawn patrol init",
+    "5am. pig respects madness.",
     "breakfast hack innit"
 };
 static const char* const PHRASES_TIME_EARLY_WARHOG[] = {
@@ -165,139 +166,139 @@ static const char* const PHRASES_TIME_LATENIGHT_WARHOG[] = {
 };
 static const char* const PHRASES_TIME_SPECIAL[] = {
     "13:37. pig approves.",
-    "its high noon somewhere",
+    "12:00. sun overhead. pig melts.",
     "04:20. no comment.",
     "witching hour. pig awake.",
-    "00:00. day reset. pig endures."
+    "00:00. pig persists."
 };
 
 // Idea 3: Network density phrases
 static const char* const PHRASES_DENSITY_HIGH[] = {
     "WIFI BUFFET",
-    "snout overwhelmed",
-    "too many. pig dizzy.",
-    "target rich. pig excited.",
-    "all you can sniff"
+    "drowning in beacons mate",
+    "snout cant keep up",
+    "802.11 rush hour",
+    "pig spoiled for choice"
 };
 static const int PHRASES_DENSITY_HIGH_COUNT = 5;
 
 static const char* const PHRASES_DENSITY_LOW[] = {
-    "wifi desert mode",
     "tumbleweeds. digital.",
-    "where all the APs at",
-    "empty spectrum. sad pig."
+    "snout finds sod all",
+    "airwaves gone quiet bruv",
+    "not a beacon in sight"
 };
 static const int PHRASES_DENSITY_LOW_COUNT = 4;
 
 static const char* const PHRASES_DENSITY_TRANSITION[] = {
-    "density dropping fast",
-    "entering hot zone",
-    "new territory. pig alert."
+    "APs vanishing fast",
+    "truffles appearing innit",
+    "landscape changed. pig notices."
 };
 static const int PHRASES_DENSITY_TRANSITION_COUNT = 3;
 
 // Idea 4: Challenge proximity phrases
 static const char* const PHRASES_CHALLENGE_CLOSE[] = {
-    "almost. pig holds breath.",
-    "so close. dont choke.",
-    "one more. just one more.",
-    "pig sees the finish line",
-    "the demand is nearly met"
+    "trial almost done. dont choke.",
+    "so close bruv. PIG WATCHES.",
+    "nearly there. pig stares.",
+    "the demand is nearly met",
+    "finish this. pig waits."
 };
 static const int PHRASES_CHALLENGE_CLOSE_COUNT = 5;
 
 // Idea 5: GPS movement phrases
 static const char* const PHRASES_GPS_STILL[] = {
     "pig grows roots",
-    "standing still. pig bored.",
-    "move. truffles wont come to u."
+    "oi. we parked or what",
+    "truffles dont walk here mate"
 };
 static const char* const PHRASES_GPS_WALK_OINK[] = { "trotting nicely", "good pace bruv" };
 static const char* const PHRASES_GPS_WALK_WARHOG[] = { "steady patrol sir", "foot mobile" };
 static const char* const PHRASES_GPS_FAST[] = {
     "PIG GOING FAST",
-    "vehicle detected. pig holds on.",
-    "speed run irl"
+    "snout in the wind bruv",
+    "mobile recon activated"
 };
 static const char* const PHRASES_GPS_VFAST[] = {
     "pig requests seatbelt",
-    "highway truffle hunt"
+    "motorway truffle sweep"
 };
 static const char* const PHRASES_GPS_BADFIX[] = {
-    "GPS confused. pig lost.",
-    "satellites hiding",
+    "satellites ghosting me",
+    "hdop tragic. position: vibes",
     "position: somewhere"
 };
 static const char* const PHRASES_GPS_FIXBACK[] = {
-    "GPS back. pig knows where.",
-    "found the sky again"
+    "found the sky again",
+    "sats locked. pig oriented."
 };
 
 // Idea 6: Session fatigue phrases
 static const char* const PHRASES_FATIGUE[] = {
-    "half hour in. pig warms up.",     // 0: 30min
-    "1 hour. pig respects commitment.",// 1: 1hr
+    "half hour. snout calibrated.",    // 0: 30min
+    "1 hour. pig nods. proper.",       // 1: 1hr
     "2 hours. outside exists btw.",    // 2: 2hr
     "3 HOURS. pig concerned for you.", // 3: 3hr
-    "piggy judges ur life choices",    // 4: 4hr
+    "4 hours. pig judges silently.",   // 4: 4hr
     "MARATHON. PIG SALUTES."           // 5: 6hr
 };
 
 // Idea 7: Encryption reaction phrases
 static const char* const PHRASES_ENC_WEP[] = {
     "WEP?! what year is this",
-    "WEP spotted. pig amused.",
-    "ancient relic detected"
+    "WEP in 2026. pig speechless.",
+    "WEP network. actual fossil."
 };
 static const char* const PHRASES_ENC_WPA3[] = {
-    "WPA3. pig respects this one.",
-    "proper security. rare."
+    "WPA3. tough nut this one.",
+    "WPA3 spotted. grudging respect."
 };
 static const char* const PHRASES_ENC_OPEN[] = {
-    "open net. no password. bold.",
+    "open network. absolute madlad.",
     "free wifi. pig suspicious."
 };
-static const char* const PHRASES_ENC_MANY_OPEN = "so many open nets. yikes.";
+static const char* const PHRASES_ENC_MANY_OPEN = "open nets everywhere. chaos.";
 
 // Idea 8: Buff/debuff awareness phrases
 static const char* const PHRASES_BUFF_GAINED[] = {
-    "power up! pig glows.",
-    "NE0N HIGH. pig feels electric.",
-    "pig buffed. pig ready."
+    "something kicked in bruv",
+    "snout tingling. stats shifted.",
+    "pig juiced. modifiers active."
 };
 static const char* const PHRASES_DEBUFF_GAINED[] = {
-    "debuff active. pig sluggish.",
-    "pig nerfed. pig endures.",
-    "hamstrung. pig limps on."
+    "mood tanked. penalties innit.",
+    "pig sluggish. numbers dropping.",
+    "debuffed proper. pig suffers."
 };
-static const char* const PHRASES_BUFF_LOST = "buff wore off. pig normal.";
+static const char* const PHRASES_BUFF_LOST = "modifier expired. pig baseline.";
 
 // Idea 9: Charging state phrases
 static const char* const PHRASES_CHARGING_ON[] = {
-    "plugged in. pig rests.",
-    "charging. pig naps.",
-    "electrons flowing. pig grateful."
+    "plugged in. pig goes idle.",
+    "on mains. trough refilling.",
+    "USB feeding. pig content."
 };
 static const char* const PHRASES_CHARGING_OFF[] = {
-    "unplugged. adventure begins.",
-    "on battery. pig lightweight."
+    "unplugged. clock ticking.",
+    "on battery now. finite pig."
 };
-static const char* const PHRASES_CHARGING_OFF_LOW = "unplugged at %d%%. pig nervous.";
+static const char* const PHRASES_CHARGING_OFF_LOW = "unplugged at %d%%. bold move.";
 
 // Idea 10: Return-session phrases
 static const char* const PHRASES_RETURN_QUICK[] = {
-    "back already?",
-    "missed me? pig missed you.",
-    "quick reboot. pig ready."
+    "back already bruv?",
+    "quick cycle. pig respects.",
+    "reboot speed: suspicious"
 };
 static const char* const PHRASES_RETURN_NORMAL[] = {
-    "welcome back. pig waited.",
-    "pig remembers."
+    "pig waited. pig always waits.",
+    "snout remembers. pig ready."
 };
 static const char* const PHRASES_RETURN_LONG[] = {
-    "pig thought you left.",
-    "long time no sniff.",
-    "pig was lonely. pig lies."
+    "gone ages. pig coped. barely.",
+    "pig was lonely. pig lies.",
+    "long absence. heap survived."
 };
 
 static char bubblePhraseRaw[128] = "";

@@ -276,7 +276,12 @@ static void ensureSdSpiReady() {
 bool Config::init() {
     // Initialize SPIFFS first (always available)
     if (!SPIFFS.begin(false)) {
-        Serial.println("[CONFIG] SPIFFS mount failed (not formatting - data preserved)");
+        Serial.println("[CONFIG] SPIFFS mount failed, attempting format...");
+        if (!SPIFFS.begin(true)) {
+            Serial.println("[CONFIG] SPIFFS format failed! Personality settings will not persist.");
+        } else {
+            Serial.println("[CONFIG] SPIFFS formatted and mounted OK");
+        }
     }
 
     // Allow buses to stabilize after M5.begin()
@@ -604,7 +609,7 @@ bool Config::load() {
 
     ConfigBlob blob;
 
-    // 1. Try binary from SD
+    // 1. Try binary from SD (current layout path)
     if (sdAvailable && readBlobFrom((fs::FS&)SD, configBinPathSD(), blob)) {
         extractBlob(blob, gpsConfig, wifiConfig, bleConfig, mlConfig);
         sanitizeWiFiConfig(wifiConfig);
@@ -612,6 +617,21 @@ bool Config::load() {
         // Mirror to SPIFFS
         writeBlobTo((fs::FS&)SPIFFS, CONFIG_BIN_FILE, blob);
         return true;
+    }
+
+    // 1b. Try legacy binary path on SD (migration may not have moved porkchop.dat)
+    if (sdAvailable && SDLayout::usingNewLayout()) {
+        if (readBlobFrom((fs::FS&)SD, "/porkchop.dat", blob)) {
+            extractBlob(blob, gpsConfig, wifiConfig, bleConfig, mlConfig);
+            sanitizeWiFiConfig(wifiConfig);
+            Serial.println("[CONFIG] Loaded binary from legacy SD path, migrating...");
+            // Move to new location and mirror to SPIFFS
+            writeBlobTo((fs::FS&)SD, configBinPathSD(), blob);
+            writeBlobTo((fs::FS&)SPIFFS, CONFIG_BIN_FILE, blob);
+            SD.remove("/porkchop.dat");
+            Serial.println("[CONFIG] Migrated porkchop.dat to new layout path");
+            return true;
+        }
     }
 
     // 2. Try binary from SPIFFS

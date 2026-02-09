@@ -46,6 +46,7 @@ static constexpr const char* kLegacyHeapLog = "/heap_log.txt";
 static constexpr const char* kLegacyHeapWatermarks = "/heap_wm.bin";
 static constexpr const char* kLegacyWpasecKey = "/wpasec_key.txt";
 static constexpr const char* kLegacyWigleKey = "/wigle_key.txt";
+static constexpr const char* kLegacyConfigBin = "/porkchop.dat";
 
 static constexpr const char* kNewConfigPath = "/m5porkchop/config/porkchop.conf";
 static constexpr const char* kNewPersonalityPath = "/m5porkchop/config/personality.json";
@@ -62,6 +63,7 @@ static constexpr const char* kNewHeapLog = "/m5porkchop/diagnostics/heap_log.txt
 static constexpr const char* kNewHeapWatermarks = "/m5porkchop/diagnostics/heap_wm.bin";
 static constexpr const char* kNewWpasecKey = "/m5porkchop/wpa-sec/wpasec_key.txt";
 static constexpr const char* kNewWigleKey = "/m5porkchop/wigle/wigle_key.txt";
+static constexpr const char* kNewConfigBin = "/m5porkchop/config/porkchop.dat";
 
 // Use mutex to protect shared state
 static portMUX_TYPE layoutMutex = portMUX_INITIALIZER_UNLOCKED;
@@ -278,6 +280,7 @@ static bool hasLegacyData() {
     if (SD.exists(kLegacyHeapWatermarks)) return true;
     if (SD.exists(kLegacyWpasecKey)) return true;
     if (SD.exists(kLegacyWigleKey)) return true;
+    if (SD.exists(kLegacyConfigBin)) return true;
 
     std::vector<String> diag;
     // Reserve space to reduce allocations
@@ -301,6 +304,7 @@ static bool backupLegacy(const char* backupRoot) {
     const char* legacyFiles[] = {
         kLegacyConfig,
         kLegacyPersonality,
+        kLegacyConfigBin,
         kLegacyWpasecResults,
         kLegacyWpasecUploaded,
         kLegacyWpasecSent,
@@ -592,6 +596,7 @@ bool migrateIfNeeded() {
     const char* legacyFiles[] = {
         kLegacyConfig,
         kLegacyPersonality,
+        kLegacyConfigBin,
         kLegacyWpasecResults,
         kLegacyWpasecUploaded,
         kLegacyWpasecSent,
@@ -698,6 +703,7 @@ bool migrateIfNeeded() {
     if (!movePath(kLegacyScreenshots, kNewScreenshots, moved)) { rollbackMoves(moved); setUseNewLayout(false); return false; }
 
     if (!movePath(kLegacyConfig, kNewConfigPath, moved)) { rollbackMoves(moved); setUseNewLayout(false); return false; }
+    if (!movePath(kLegacyConfigBin, kNewConfigBin, moved)) { rollbackMoves(moved); setUseNewLayout(false); return false; }
     if (!movePath(kLegacyPersonality, kNewPersonalityPath, moved)) { rollbackMoves(moved); setUseNewLayout(false); return false; }
     if (!movePath(kLegacyWpasecResults, kNewWpasecResults, moved)) { rollbackMoves(moved); setUseNewLayout(false); return false; }
     if (!movePath(kLegacyWpasecUploaded, kNewWpasecUploaded, moved)) { rollbackMoves(moved); setUseNewLayout(false); return false; }

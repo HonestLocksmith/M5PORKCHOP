@@ -3450,7 +3450,7 @@ BACKSPACE      PARENT FOLDER
 void FileServer::init() {
     refreshSdPaths();
     state = FileServerState::IDLE;
-    strcpy(statusMessage, "Ready");
+    snprintf(statusMessage, sizeof(statusMessage), "%s", "Ready");
     targetSSID[0] = '\0';
     targetPassword[0] = '\0';
     sessionRxBytes = 0;
@@ -3474,7 +3474,7 @@ bool FileServer::start(const char* ssid, const char* password) {
     
     // Check credentials
     if (strlen(targetSSID) == 0) {
-        strcpy(statusMessage, "No WiFi SSID set");
+        snprintf(statusMessage, sizeof(statusMessage), "%s", "No WiFi SSID set");
         return false;
     }
 
@@ -3490,7 +3490,7 @@ bool FileServer::start(const char* ssid, const char* password) {
                       (int)(largestAfter - largestBefore));
     }
     
-    strcpy(statusMessage, "jacking in.");
+    snprintf(statusMessage, sizeof(statusMessage), "%s", "jacking in.");
     logWiFiStatus("before connect");
 
     sessionRxBytes = 0;
@@ -3523,7 +3523,7 @@ void FileServer::startServer() {
         if (gate.failure != HeapGates::TlsGateFailure::None) {
             FS_LOGF("[FILESERVER] Low heap for WebServer: free=%u largest=%u\n",
                           (unsigned)gate.freeHeap, (unsigned)gate.largestBlock);
-            strcpy(statusMessage, "Low heap");
+            snprintf(statusMessage, sizeof(statusMessage), "%s", "Low heap");
             MDNS.end();
             WiFiUtils::shutdown();
             state = FileServerState::IDLE;
@@ -3534,7 +3534,7 @@ void FileServer::startServer() {
     server = new WebServer(80);
     if (!server) {
         FS_LOGLN("[FILESERVER] WebServer allocation failed");
-        strcpy(statusMessage, "Server alloc fail");
+        snprintf(statusMessage, sizeof(statusMessage), "%s", "Server alloc fail");
         MDNS.end();
         WiFiUtils::shutdown();
         state = FileServerState::IDLE;
@@ -3620,7 +3620,7 @@ void FileServer::stop() {
     }
     
     state = FileServerState::IDLE;
-    strcpy(statusMessage, "OFFLINE");
+    snprintf(statusMessage, sizeof(statusMessage), "%s", "OFFLINE");
     sessionRxBytes = 0;
     sessionTxBytes = 0;
     sessionUploadCount = 0;
@@ -3667,7 +3667,7 @@ void FileServer::updateConnecting() {
     
     // Timeout after 15 seconds
     if (elapsed > 15000) {
-        strcpy(statusMessage, "LINK FAILED");
+        snprintf(statusMessage, sizeof(statusMessage), "%s", "LINK FAILED");
         logWiFiStatus("connect timeout");
         WiFiUtils::shutdown();
         state = FileServerState::IDLE;
@@ -3709,7 +3709,7 @@ void FileServer::updateRunning() {
         lastReconnectCheck = now;
         
         if (WiFi.status() != WL_CONNECTED) {
-            strcpy(statusMessage, "retry hack.");
+            snprintf(statusMessage, sizeof(statusMessage), "%s", "retry hack.");
             logWiFiStatus("wifi lost");
 
             if (uploadActive.load()) {

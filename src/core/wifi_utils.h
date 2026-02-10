@@ -32,17 +32,6 @@ namespace WiFiUtils {
     void stopPromiscuous();
     
     /**
-     * @brief Locks the TLS mutex with timeout to prevent WDT resets
-     * @note Returns early if lock cannot be acquired within 100ms
-     */
-    void lockTls();
-    
-    /**
-     * @brief Unlocks the TLS mutex
-     */
-    void unlockTls();
-    
-    /**
      * @brief Ensures TLS memory reserve of specified size is available
      * @param bytes Size of the memory reserve to ensure
      * @return true if successful, false otherwise

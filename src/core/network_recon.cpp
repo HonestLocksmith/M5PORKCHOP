@@ -98,7 +98,7 @@ static std::atomic<uint8_t> pendingSsidWrite{0};
 // Mode-Specific Callbacks
 // ============================================================================
 
-static PacketCallback modeCallback = nullptr;
+static std::atomic<PacketCallback> modeCallback{nullptr};
 static NewNetworkCallback newNetworkCallback = nullptr;
 
 // ============================================================================
@@ -582,8 +582,9 @@ static void promiscuousCallback(void* buf, wifi_promiscuous_pkt_type_t type) {
     if (!buf) return;
     if (!running || paused) return;
     if (busy) {
-        if (modeCallback) {
-            modeCallback((wifi_promiscuous_pkt_t*)buf, type);
+        PacketCallback cb = modeCallback.load(std::memory_order_relaxed);
+        if (cb) {
+            cb((wifi_promiscuous_pkt_t*)buf, type);
         }
         return;
     }
@@ -624,8 +625,9 @@ static void promiscuousCallback(void* buf, wifi_promiscuous_pkt_type_t type) {
     }
     
     // Mode-specific callback (for EAPOL capture, PCAP logging, etc.)
-    if (modeCallback) {
-        modeCallback(pkt, type);
+    PacketCallback cb = modeCallback.load(std::memory_order_relaxed);
+    if (cb) {
+        cb(pkt, type);
     }
 }
 
@@ -753,7 +755,7 @@ void init() {
     for (uint8_t i = 0; i < PENDING_SSID_SLOTS; i++) {
         pendingSsids[i].ready.store(false, std::memory_order_relaxed);
     }
-    modeCallback = nullptr;
+    modeCallback.store(nullptr, std::memory_order_relaxed);
     heapStabilized = false;
     
     initialized = true;
@@ -900,7 +902,7 @@ void resume() {
     
     // [BUG4 FIX] Restore channel lock only if mode callback still registered
     // (If modeCallback is null, no mode owns the lock anymore)
-    if (channelLockedBeforePause && modeCallback != nullptr) {
+    if (channelLockedBeforePause && modeCallback.load(std::memory_order_acquire) != nullptr) {
         channelLocked.store(true, std::memory_order_release);
         Serial.printf("[RECON] Channel lock restored to %d\n", lockedChannel);
     }
@@ -1087,7 +1089,7 @@ void setChannel(uint8_t channel) {
 }
 
 void setPacketCallback(PacketCallback callback) {
-    modeCallback = callback;
+    modeCallback.store(callback, std::memory_order_release);
 }
 
 void setNewNetworkCallback(NewNetworkCallback callback) {

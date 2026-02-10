@@ -13,7 +13,6 @@
 
 namespace WiFiUtils {
 
-static SemaphoreHandle_t tlsMutex = nullptr;
 static SemaphoreHandle_t reserveMutex = nullptr;
 static void* tlsReserve = nullptr;
 static size_t tlsReserveSize = 0;
@@ -36,7 +35,6 @@ static void ensureInitialized() {
     if (initialized) return;
     portENTER_CRITICAL(&initMux);
     if (!initialized) {
-        if (!tlsMutex) tlsMutex = xSemaphoreCreateMutex();
         if (!reserveMutex) reserveMutex = xSemaphoreCreateMutex();
         if (!timeSyncMutex) timeSyncMutex = xSemaphoreCreateMutex();
         initialized = true;
@@ -59,24 +57,6 @@ void stopPromiscuous() {
     esp_wifi_set_promiscuous_rx_cb(nullptr);
 }
 
-void lockTls() {
-    ensureInitialized(); // Make sure all mutexes are initialized
-    
-    if (tlsMutex) {
-        // Use timeout to prevent indefinite blocking and WDT resets
-        if (xSemaphoreTake(tlsMutex, pdMS_TO_TICKS(100)) != pdTRUE) {
-            // If we can't acquire the lock within 100ms, return early
-            // This prevents WDT resets from indefinite blocking
-            return;
-        }
-    }
-}
-
-void unlockTls() {
-    if (tlsMutex) {
-        xSemaphoreGive(tlsMutex);
-    }
-}
 
 bool ensureTlsReserve(size_t bytes) {
     ensureInitialized(); // Make sure all mutexes are initialized

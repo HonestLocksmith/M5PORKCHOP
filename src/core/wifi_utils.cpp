@@ -273,10 +273,27 @@ void shutdown() {
     delay(HeapPolicy::kWiFiShutdownDelayMs);
 }
 
+// Cooldown guard for manual conditionHeapForTLS() callers.
+// The auto-brew path (maybeAutoConditionHeap) has its own 5-layer protection,
+// but manual callers (WiGLE, WPA-SEC, FileServer) bypass those layers.
+// This timestamp prevents any caller from brewing more often than the
+// policy minimum, protecting against accidental loop patterns.
+static uint32_t lastManualConditionMs = 0;
+
 size_t conditionHeapForTLS() {
+    // Enforce minimum cooldown between manual conditioning calls
+    uint32_t now = millis();
+    if (lastManualConditionMs != 0 &&
+        (now - lastManualConditionMs) < HeapPolicy::kConditionCooldownMinMs) {
+        Serial.printf("[HEAP] conditionHeapForTLS() skipped: cooldown (%us remaining)\n",
+                      (unsigned)((HeapPolicy::kConditionCooldownMinMs - (now - lastManualConditionMs)) / 1000));
+        return heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+    }
+    lastManualConditionMs = now;
+
     // "OINK Bounce" effect - mimics the heap conditioning that happens
     // when entering/exiting OINK mode, which reclaims ~20-30KB of memory
-    
+
     size_t initialLargest = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
     size_t initialFree = ESP.getFreeHeap();
     
@@ -415,6 +432,7 @@ size_t conditionHeapForTLS() {
     Serial.printf("[HEAP] Conditioning complete: free=%u (%+d) largest=%u (%+d)\n",
                   finalFree, freedBytes, finalLargest, contiguousGain);
     HeapHealth::resetPeaks(true);
+    lastManualConditionMs = millis();  // Cooldown starts from brew completion
     return finalLargest;
 }
 
